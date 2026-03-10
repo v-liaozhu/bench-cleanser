@@ -1,7 +1,8 @@
-"""Stage 6: Per-category scoring and final classification.
+"""Stage 5/6: Per-category scoring and final classification.
 
-Combines signals from Stages 2-5 into per-category confidence scores
-and a composite contamination score.
+v1: Combines signals from Stages 2-5 into 7-category confidence scores.
+v2: Combines intent-matching verdicts into 4-category scoring (EXCESS_PATCH,
+    EXCESS_TEST, VAGUE_SPEC, CLEAN) with actionable recommendations.
 """
 
 from __future__ import annotations
@@ -14,11 +15,18 @@ from bench_cleanser.models import (
     CategoryScore,
     ContaminationCategory,
     ContaminationReport,
+    ContaminationReportV2,
     CrossReferenceAnalysis,
+    ExcessPatchDetail,
+    ExcessTestDetail,
+    IntentStatement,
     PatchAnalysis,
     PipelineConfig,
     ScopeAnalysis,
     TestAnalysis,
+    VagueSpecDetail,
+    VerdictCategory,
+    VerdictScore,
 )
 
 logger = logging.getLogger(__name__)
@@ -219,4 +227,214 @@ def build_report(
         patch_hunk_reports=patch.hunk_reports,
         compound_patterns=cross_ref.compound_patterns,
         evidence_summary=evidence,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2 Scoring: 4-category intent-matching system
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def compute_verdict_scores(
+    excess_patch: ExcessPatchDetail,
+    excess_test: ExcessTestDetail,
+    vague_spec: VagueSpecDetail,
+) -> dict[str, VerdictScore]:
+    """Compute v2 verdict scores for the 4-category system.
+
+    Returns a dict keyed by VerdictCategory value.
+    """
+    scores: dict[str, VerdictScore] = {}
+
+    # V1: EXCESS_PATCH
+    ep_evidence: list[str] = []
+    if excess_patch.unrelated_count > 0:
+        ep_evidence.append(
+            f"{excess_patch.unrelated_count}/{excess_patch.total_hunks} "
+            f"hunk(s) are UNRELATED to the task"
+        )
+    if excess_patch.ancillary_count > 0:
+        ep_evidence.append(
+            f"{excess_patch.ancillary_count} hunk(s) are ANCILLARY "
+            f"(infrastructure, not described in problem)"
+        )
+    scores[VerdictCategory.EXCESS_PATCH.value] = VerdictScore(
+        category=VerdictCategory.EXCESS_PATCH,
+        confidence=_clamp(excess_patch.score),
+        evidence=ep_evidence,
+    )
+
+    # V2: EXCESS_TEST
+    et_evidence: list[str] = []
+    if excess_test.off_topic_assertions > 0:
+        et_evidence.append(
+            f"{excess_test.off_topic_assertions}/{excess_test.total_assertions} "
+            f"assertion(s) are OFF_TOPIC"
+        )
+    if excess_test.unrelated_count > 0:
+        et_evidence.append(
+            f"{excess_test.unrelated_count} test(s) are entirely UNRELATED "
+            f"to the task"
+        )
+    if excess_test.tangential_count > 0:
+        et_evidence.append(
+            f"{excess_test.tangential_count} test(s) are TANGENTIAL "
+            f"(partially related)"
+        )
+    if excess_test.has_modified_tests:
+        et_evidence.append(
+            "Pre-existing test(s) were modified in the F2P set"
+        )
+    scores[VerdictCategory.EXCESS_TEST.value] = VerdictScore(
+        category=VerdictCategory.EXCESS_TEST,
+        confidence=_clamp(excess_test.score),
+        evidence=et_evidence,
+    )
+
+    # V3: VAGUE_SPEC
+    vs_evidence: list[str] = []
+    if vague_spec.score > 0.3:
+        vs_evidence.append(
+            f"Ambiguity score: {vague_spec.score:.2f}"
+        )
+    if vague_spec.reasoning:
+        vs_evidence.append(vague_spec.reasoning)
+    scores[VerdictCategory.VAGUE_SPEC.value] = VerdictScore(
+        category=VerdictCategory.VAGUE_SPEC,
+        confidence=_clamp(vague_spec.score),
+        evidence=vs_evidence,
+    )
+
+    # V4: CLEAN (inverse — confidence that the task IS clean)
+    # Not used in combined_score; it's derived from the others
+    scores[VerdictCategory.CLEAN.value] = VerdictScore(
+        category=VerdictCategory.CLEAN,
+        confidence=0.0,  # Set after combined_score is computed
+        evidence=[],
+    )
+
+    return scores
+
+
+def compute_combined_score(
+    verdict_scores: dict[str, VerdictScore],
+) -> float:
+    """Compute combined contamination score for v2.
+
+    Formula: combined = 1 - (1 - excess_patch) * (1 - excess_test) * (1 - vague_spec)
+    """
+    ep = verdict_scores.get(VerdictCategory.EXCESS_PATCH.value)
+    et = verdict_scores.get(VerdictCategory.EXCESS_TEST.value)
+    vs = verdict_scores.get(VerdictCategory.VAGUE_SPEC.value)
+
+    ep_conf = ep.confidence if ep else 0.0
+    et_conf = et.confidence if et else 0.0
+    vs_conf = vs.confidence if vs else 0.0
+
+    combined = 1.0 - (1.0 - ep_conf) * (1.0 - et_conf) * (1.0 - vs_conf)
+    return _clamp(combined)
+
+
+def build_recommendations(
+    excess_patch: ExcessPatchDetail,
+    excess_test: ExcessTestDetail,
+    vague_spec: VagueSpecDetail,
+) -> list[str]:
+    """Build actionable recommendations for a v2 report."""
+    recs: list[str] = []
+
+    if excess_patch.unrelated_count > 0:
+        recs.append(
+            f"EXCESS_PATCH: {excess_patch.unrelated_count}/{excess_patch.total_hunks} "
+            f"hunk(s) modify code unrelated to the problem description. "
+            f"Agents should not be required to reproduce these changes."
+        )
+    if excess_patch.ancillary_count > 0 and excess_patch.unrelated_count == 0:
+        recs.append(
+            f"EXCESS_PATCH: {excess_patch.ancillary_count} hunk(s) are infrastructure "
+            f"changes (imports, config). Minor impact on evaluation fairness."
+        )
+
+    if excess_test.off_topic_assertions > 0:
+        recs.append(
+            f"EXCESS_TEST: {excess_test.off_topic_assertions}/{excess_test.total_assertions} "
+            f"assertion(s) test behavior beyond problem scope."
+        )
+    if excess_test.unrelated_count > 0:
+        recs.append(
+            f"EXCESS_TEST: {excess_test.unrelated_count} F2P test(s) are entirely "
+            f"unrelated to the described problem."
+        )
+
+    if vague_spec.score > 0.5:
+        recs.append(
+            f"VAGUE_SPEC: Problem statement has significant ambiguity "
+            f"(score: {vague_spec.score:.2f}). Multiple valid solutions likely exist."
+        )
+    elif vague_spec.score > 0.3:
+        recs.append(
+            f"VAGUE_SPEC: Problem statement has moderate ambiguity "
+            f"(score: {vague_spec.score:.2f})."
+        )
+
+    if not recs:
+        recs.append("No contamination signals detected. Evaluation criteria appear fair.")
+
+    return recs
+
+
+def build_evidence_summary_v2(
+    verdict_scores: dict[str, VerdictScore],
+) -> str:
+    """Build a human-readable evidence summary for v2 report."""
+    parts: list[str] = []
+
+    for name, vs in verdict_scores.items():
+        if vs.category == VerdictCategory.CLEAN:
+            continue
+        if vs.confidence >= 0.2 and vs.evidence:
+            parts.append(f"{name} ({vs.confidence:.2f}): {'; '.join(vs.evidence)}")
+
+    return " | ".join(parts) if parts else "No significant contamination signals"
+
+
+def build_report_v2(
+    intent: IntentStatement,
+    excess_patch: ExcessPatchDetail,
+    excess_test: ExcessTestDetail,
+    vague_spec: VagueSpecDetail,
+    config: PipelineConfig,
+) -> ContaminationReportV2:
+    """Build the v2 ContaminationReport from intent-matching results.
+
+    This is the main entry point for Stage 5 of the v2 pipeline.
+    """
+    verdict_scores = compute_verdict_scores(excess_patch, excess_test, vague_spec)
+    combined = compute_combined_score(verdict_scores)
+
+    # Update CLEAN confidence (inverse of combined)
+    clean_score = verdict_scores[VerdictCategory.CLEAN.value]
+    clean_score.confidence = _clamp(1.0 - combined)
+    if combined < config.clean_max:
+        clean_score.evidence.append("All evaluation criteria align with the task description")
+
+    severity = classify_severity(
+        combined,
+        clean_max=config.clean_max,
+        minor_max=config.minor_max,
+        moderate_max=config.moderate_max,
+    )
+
+    recommendations = build_recommendations(excess_patch, excess_test, vague_spec)
+
+    return ContaminationReportV2(
+        instance_id=intent.instance_id,
+        severity=severity,
+        combined_score=combined,
+        intent=intent,
+        excess_patch=excess_patch,
+        excess_test=excess_test,
+        vague_spec=vague_spec,
+        categories=verdict_scores,
+        recommendations=recommendations,
     )

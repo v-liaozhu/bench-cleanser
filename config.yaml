@@ -1,44 +1,25 @@
-# bench-cleanser configuration
-
 llm:
-  # CloudGPT Azure OpenAI endpoint (uses Azure AD auth via cloudgpt.py)
   base_url: "https://cloudgpt-openai.azure-api.net/"
   api_version: "2025-04-01-preview"
   model: "gpt-5.2-20251211"
-  max_tokens: 8192
-  # Reasoning effort: "none", "medium", or "high"
-  # "high" enables thorough step-by-step reasoning for accurate analysis
+  max_tokens: 4096
   reasoning_effort: "high"
   max_concurrent_requests: 10
-  retry_attempts: 3
-  retry_delay_seconds: 2
+  retry_attempts: 7
+  retry_delay_seconds: 5.0
 
 pipeline:
-  # Number of tasks to process in parallel
-  concurrency: 5
-  # Cache directory for LLM responses
+  concurrency: 3
   cache_dir: ".cache/llm_responses"
-  # Output directory for reports
-  output_dir: "output"
+  output_dir: "output_v2_no_fallback"
 
 thresholds:
-  # Severity classification thresholds
   clean_max: 0.2
   minor_max: 0.5
   moderate_max: 0.8
-  # Above moderate_max = SEVERE
-
-astred:
-  # ASTRED local tool configuration
-  enabled: false
-  binary_path: ""
 
 code_visitation:
-  # Clone repos at base_commit for full source code analysis
   enabled: true
-  # Local cache for cloned repos (reused across runs)
   repo_cache_dir: ".cache/repos"
-  # Timeout for git clone operations (seconds)
   clone_timeout_seconds: 120
-  # Max lines of source context per function (prevents token explosion)
   max_source_context_lines: 200

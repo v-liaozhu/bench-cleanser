@@ -15,7 +15,12 @@ import os
 from typing import Any
 
 import openai
-from openai import APIConnectionError, APITimeoutError, RateLimitError
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    RateLimitError,
+)
 
 from bench_cleanser.cache import ResponseCache
 from bench_cleanser.models import PipelineConfig
@@ -23,15 +28,21 @@ from bench_cleanser.models import PipelineConfig
 logger = logging.getLogger(__name__)
 
 # Errors that should trigger a retry with exponential back-off.
-_RETRYABLE_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError)
+# InternalServerError (HTTP 500) is included because Azure OpenAI
+# returns transient 500s under load.
+_RETRYABLE_ERRORS = (
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    RateLimitError,
+)
 
 
 def _create_async_client(config: PipelineConfig) -> openai.AsyncAzureOpenAI:
     """Create an AsyncAzureOpenAI client using CloudGPT token provider.
 
-    If ``config.llm_api_key`` is set (non-empty), uses that as a static
-    token.  Otherwise, uses the cloudgpt module's Azure AD token provider
-    with ``az`` CLI authentication.
+    Uses the cloudgpt module's Azure AD token provider with ``az`` CLI
+    authentication.
     """
     # Add the project root to sys.path so cloudgpt.py can be imported
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -49,6 +60,7 @@ def _create_async_client(config: PipelineConfig) -> openai.AsyncAzureOpenAI:
         api_version=config.llm_api_version,
         azure_endpoint=config.llm_base_url,
         azure_ad_token_provider=token_provider,
+        max_retries=0,  # We handle retries ourselves with proper backoff
     )
 
 
@@ -89,8 +101,8 @@ class LLMClient:
     ) -> str:
         """Execute a single chat-completion request with retries.
 
-        Returns the assistant content string, or ``""`` after all retries
-        are exhausted.
+        Returns the assistant content string.  Raises ``RuntimeError``
+        after all retries are exhausted.
         """
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system_prompt},
@@ -114,7 +126,7 @@ class LLMClient:
                 return content
             except _RETRYABLE_ERRORS as exc:
                 last_exc = exc
-                delay = self._retry_delay * (2 ** (attempt - 1))
+                delay = min(self._retry_delay * (2 ** (attempt - 1)), 60.0)
                 logger.warning(
                     "LLM request failed (attempt %d/%d): %s – retrying in %.1fs",
                     attempt,
@@ -125,14 +137,12 @@ class LLMClient:
                 await asyncio.sleep(delay)
             except Exception as exc:  # noqa: BLE001
                 logger.error("LLM request failed with non-retryable error: %s", exc)
-                return ""
+                raise
 
-        logger.error(
-            "LLM request failed after %d attempts. Last error: %s",
-            self._retry_attempts,
-            last_exc,
+        raise RuntimeError(
+            f"LLM request failed after {self._retry_attempts} attempts. "
+            f"Last error: {last_exc}"
         )
-        return ""
 
     @staticmethod
     def _extract_json(text: str) -> dict[str, Any]:
@@ -190,7 +200,7 @@ class LLMClient:
         response_format:
             ``"text"`` (default) or ``"json_object"``.
 
-        Returns ``""`` on failure after retries.
+        Raises on API failure after retries.
         """
         key = self._cache_key(system_prompt, user_prompt)
 
@@ -222,10 +232,9 @@ class LLMClient:
         """Send a chat-completion request and return the parsed JSON dict.
 
         The method first attempts to use the API-level
-        ``response_format={"type": "json_object"}`` parameter.  If that
-        fails (e.g. the model does not support it) it falls back to
-        adding an explicit instruction to the system prompt and parsing
-        the raw text response.
+        ``response_format={"type": "json_object"}`` parameter.  If the
+        model returns empty content, retries with an explicit JSON
+        instruction injected into the system prompt.
 
         Parameters
         ----------
@@ -233,7 +242,7 @@ class LLMClient:
             If ``True``, bypass the cache for this request and make a
             fresh API call.  The result will still be stored in the cache.
 
-        Returns ``{}`` on failure.
+        Raises on API failure (no silent fallback to ``{}``).
         """
         key = self._cache_key(system_prompt, user_prompt)
 

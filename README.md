@@ -1,218 +1,323 @@
 # bench-cleanser
 
-**A high-confidence contamination detector for SWE-bench benchmarks.**
+Automated contamination detection for SWE-bench Verified. Identifies tasks where gold patches or fail-to-pass (F2P) tests exceed the problem description, producing unfair evaluation criteria for software engineering agents.
 
-bench-cleanser analyzes SWE-bench Verified and SWE-bench Lite tasks to identify and classify instances where the evaluation is unfair to agents. It detects cases where fail-to-pass (F2P) tests and gold patches exceed the scope of what the task description actually asks for, penalizing agents for not reproducing out-of-scope changes they were never asked to make.
+## Problem
 
-## The Problem
+SWE-bench Verified (500 tasks) is the primary benchmark for evaluating software engineering agents. However, some tasks have **contaminated evaluation criteria** that penalize agents for correctly solving the *described* problem:
 
-SWE-bench is an influential benchmark for evaluating software engineering agents. However, rigorous scrutiny reveals that some tasks contain **contaminated evaluation criteria** -- tests and patches that go beyond the task description. An agent that correctly solves the described problem can still be marked as failing because the benchmark expects additional, undescribed changes.
+- **Excess patches**: Gold patches include refactoring, style changes, or features not described in the problem statement
+- **Excess tests**: F2P tests assert on behavior not described in the problem (off-topic assertions)
+- **Vague specifications**: Problem statements too ambiguous to determine a unique correct solution
 
-This is not a minor issue. It systematically distorts benchmark scores and misleads the research community about agent capabilities.
+Agents that correctly solve the *described* problem may fail these tasks because evaluation criteria test *undescribed* behavior. bench-cleanser quantifies this contamination at per-hunk and per-assertion granularity.
 
-## Case Study: `pylint-dev__pylint-8898`
+## Architecture
 
-This task demonstrates the problem clearly.
+### v2 Pipeline (Recommended): Intent-Matching
 
-### What the task asks
+The v2 pipeline uses a 5-stage architecture that extracts ground-truth intent from the problem statement and matches it against the gold patch and F2P tests:
 
-Fix a bug where pylint's `bad-names-rgxs` option crashes when a regex contains a comma inside a quantifier (e.g., `{1,3}`). The CSV splitter naively splits on all commas, mangling the regex.
-
-**Problem statement excerpt:**
-> *"bad-names-rgxs mangles regular expressions with commas... Since pylint splits on commas in this option, if there are any commas in the regular expression, the result is mangled before being parsed."*
-
-### What a correct fix looks like
-
-Add a smarter CSV splitter that skips commas inside `{}` braces. The gold patch does this by introducing `_check_regexp_csv()` in `pylint/utils/utils.py` -- this part is entirely in-scope.
-
-### Where the evaluation becomes unfair
-
-The **fail-to-pass test** that the agent is graded on is `test_csv_regex_error`. This test **already existed and passed** before the PR. The gold patch sneakily modifies it:
-
-**Before (at base commit):**
-```python
-def test_csv_regex_error(capsys):
-    with pytest.raises(SystemExit):
-        Run(
-            [str(EMPTY_MODULE), r"--bad-names-rgx=(foo{1,3})"],
-            exit=False,
-        )
-    output = capsys.readouterr()
-    assert (
-        r"Error in provided regular expression: (foo{1 beginning at index 0: "
-        r"missing ), unterminated subpattern"
-        in output.err
-    )
+```
+Stage 1:   PARSE              Extract diffs from gold patch + test patch
+Stage 1.5: CODE VISITATION     Clone repo, extract full test/function source (optional)
+Stage 2:   INTENT              Extract ground-truth intent from problem statement (LLM)
+Stage 3:   STRUCTURAL DIFF     AST-level function/class change analysis
+Stage 4:   INTENT MATCHING     Classify hunks + tests against intent (LLM)
+Stage 5:   TRIAGE & REPORT     4-category scoring + actionable recommendations
 ```
 
-**After (in gold patch):**
-```python
-def test_csv_regex_error(capsys):
-    with pytest.raises(SystemExit):
-        Run(
-            [str(EMPTY_MODULE), r"--bad-names-rgx=(foo{1,}, foo{1,3}})"],
-            exit=False,
-        )
-    output = capsys.readouterr()
-    assert (
-        r"Error in provided regular expression: (foo{1,} beginning at index 0: "
-        r"missing ), unterminated subpattern"
-        in output.err
-    )
+### 4 Verdict Categories
+
+| Category | Description | Recommended Action |
+|----------|-------------|-------------------|
+| **EXCESS_PATCH** | Gold patch includes changes beyond what the task describes | Filter UNRELATED hunks from evaluation |
+| **EXCESS_TEST** | F2P tests verify behavior beyond the task description | Exclude OFF_TOPIC assertions from pass/fail |
+| **VAGUE_SPEC** | Problem statement is ambiguous; multiple valid solutions exist | Interpret results with caution |
+| **CLEAN** | No contamination detected | No action needed |
+
+### Classification Granularity
+
+Each gold patch hunk is classified as:
+- **REQUIRED** -- Directly implements the described fix
+- **ANCILLARY** -- Supports the fix but isn't described (imports, infrastructure)
+- **UNRELATED** -- Changes behavior not described in the problem
+
+Each F2P test is classified as:
+- **ALIGNED** -- Test targets the described problem
+- **TANGENTIAL** -- Test partially targets the problem
+- **UNRELATED** -- Test doesn't target the described problem
+
+Each test assertion is classified as:
+- **ON_TOPIC** -- Assertion checks behavior described in the problem
+- **OFF_TOPIC** -- Assertion checks behavior NOT described in the problem
+
+### Scoring
+
+```
+excess_patch_score = (unrelated_hunks + 0.5 * ancillary_hunks) / total_hunks
+excess_test_score  = (off_topic_assertions + unrelated_tests * avg_assertions) / total_assertions
+combined_score     = 1 - (1 - excess_patch) * (1 - excess_test) * (1 - vague_spec)
 ```
 
-The test input changed from `(foo{1,3})` to `(foo{1,}, foo{1,3}})`. The expected error message changed from `(foo{1` to `(foo{1,}`. **Neither of these changes is described in or implied by the task description.** The task says "fix comma handling in regex CSV splitting." It does not say "also change the existing error test to use a different malformed input."
+Severity thresholds (configurable):
+- **CLEAN**: combined < 0.2
+- **MINOR**: 0.2 <= combined < 0.5
+- **MODERATE**: 0.5 <= combined < 0.8
+- **SEVERE**: combined >= 0.8
 
-An agent that correctly implements the comma-aware splitter will make `test_csv_regex_comma_in_quantifier` pass (these are new tests in PASS_TO_PASS). But it may produce different error output for the sneakily modified `test_csv_regex_error` input, because the exact error message depends on implementation details of how the new splitter processes `(foo{1,}, foo{1,3}})`.
+### v1 Pipeline (Legacy)
 
-**The agent is graded on reproducing a test modification it was never asked to make.**
+The v1 pipeline uses a 7-category overlapping taxonomy (OVERTEST, OVERPATCH, SNEAKY_TEST_MOD, SCOPE_CREEP, TEST_DESC_MISALIGN, CIRCULAR_DEPENDENCY, AMBIGUOUS_SPEC). It is retained for backward compatibility but v2 is recommended for all new analysis.
 
-### Why this matters at scale
-
-This is not an isolated case. Across 500+ tasks in SWE-bench Verified and Lite, this pattern recurs in various forms:
-- Tests modified to expect different behavior than originally specified
-- Gold patches that include refactors, style changes, or feature additions bundled with the fix
-- F2P tests that verify implementation details the task description never mentions
-- Circular dependencies where F2P tests can only pass if out-of-scope patch changes are reproduced exactly
-
-Every such task inflates the apparent difficulty of the benchmark and penalizes agents that solve the actual problem correctly.
-
-## Contamination Taxonomy
-
-bench-cleanser classifies contamination into 7 categories:
-
-| ID | Category | Description |
-|----|----------|-------------|
-| C1 | **OVERTEST** | F2P tests verify functionality beyond the task scope |
-| C2 | **OVERPATCH** | Gold patch contains changes beyond the required fix |
-| C3 | **SNEAKY_TEST_MOD** | Pre-existing tests are modified in the F2P set |
-| C4 | **SCOPE_CREEP** | The PR bundles multiple independent changes |
-| C5 | **TEST_DESC_MISALIGN** | Tests assert on specific behavior not described in the problem statement |
-| C6 | **CIRCULAR_DEPENDENCY** | F2P tests require out-of-scope patch changes to pass |
-| C7 | **AMBIGUOUS_SPEC** | Problem statement too vague to determine a unique correct solution |
-
-### Severity Levels
-
-Each task receives a composite contamination score and is classified as:
-
-- **CLEAN** (score < 0.2): Task is fair, evaluation criteria match the description
-- **MINOR** (0.2 - 0.5): Mild issues that may not affect most correct solutions
-- **MODERATE** (0.5 - 0.8): Questionable task, likely unfair to some correct solutions
-- **SEVERE** (score >= 0.8): Task is dirty, agents are graded on out-of-scope criteria
-
-## How It Works
-
-### 7-Stage Pipeline
-
-1. **Parse**: Extract structured data from SWE-bench records (patch hunks, test functions, F2P/P2P lists)
-2. **Code Visitation**: Clone repos at `base_commit`, retrieve full test source, AST-analyze test functions, identify tested source code, and build `CodeContext` for each F2P test
-3. **Scope Analysis**: LLM analyzes the problem statement *without seeing the gold patch* to determine what the task actually asks for
-4. **Patch Analysis**: Each gold patch hunk is classified as in-scope, borderline, or out-of-scope
-5. **Test Analysis**: Each F2P test is checked for scope alignment and sneaky modifications, using full pre/post-patch source, tested function code, call graph, and structured assertions when available
-6. **Cross-Reference**: Detect circular dependencies using real call-graph data from code visitation (falls back to identifier overlap heuristics without code context)
-7. **Classify**: Compute per-category confidence scores and overall severity
-
-### Key Design Principles
-
-- **Unanchored scope analysis**: The LLM never sees the gold patch when determining task scope. This prevents rationalization bias.
-- **Full code visitation**: Repos are cloned at `base_commit` to retrieve complete test source, tested source code, imports, fixtures, and call graphs. This gives the LLM far richer context than diff-only analysis.
-- **Deterministic signals first**: Before expensive LLM calls, we compute cheap deterministic signals (e.g., "does this F2P test name exist in the test_patch with removal lines?" catches Category C3 with near-perfect precision).
-- **Per-hunk granularity**: Gold patches are analyzed hunk-by-hunk, not as monoliths. This pinpoints exactly which changes exceed scope.
-- **AST-powered static analysis**: Test functions are analyzed via Python AST to extract call targets, resolve imports, identify tested functions, and structure assertions.
-- **Graceful degradation**: If repo cloning or AST parsing fails, the pipeline falls back to diff-only analysis automatically.
-- **Cached**: All LLM responses are cached by content hash. Re-runs skip already-analyzed tasks. Cloned repos are cached for reuse across runs.
-
-## Usage
+## Installation
 
 ```bash
-# Install
+git clone <repo-url>
+cd bench-cleanser
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+# Linux/Mac
+# source .venv/bin/activate
+
 pip install -r requirements.txt
-
-# Configure (edit config.yaml with your LLM endpoint)
-cp config.yaml my_config.yaml
-
-# Run on both benchmarks (500 Verified + 500 Lite)
-python run_pipeline.py --config my_config.yaml --output results/
-
-# Run on a specific benchmark
-python run_pipeline.py --config my_config.yaml --dataset verified --output results/
-
-# Run on a single task (for debugging/verification)
-python run_pipeline.py --config my_config.yaml --instance-id pylint-dev__pylint-8898 --output results/
-
-# Disable code visitation (diff-only mode, faster but less accurate)
-# Set code_visitation.enabled: false in config.yaml
 ```
 
-### Output
+### Requirements
 
-- `results/reports/` -- Per-task JSON contamination reports
-- `results/summary.csv` -- Aggregate classification table
-- `results/summary_stats.json` -- Distribution statistics
+- **Python 3.12+**
+- **Azure OpenAI access** (CloudGPT) with Azure CLI authentication (`az login`)
+- **rich** (optional) -- enhanced terminal progress display during batch runs
+
+### Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `datasets` | HuggingFace datasets for loading SWE-bench |
+| `openai` | Azure OpenAI API client |
+| `pyyaml` | Configuration file parsing |
+| `tqdm` | Progress bars (fallback when rich not installed) |
+| `azure-identity` | Azure AD authentication |
+| `azure-identity-broker` | Token brokering for Azure |
+| `msal` | Microsoft Authentication Library |
+| `requests` | HTTP client |
 
 ## Configuration
 
-See `config.yaml` for all options. Key settings:
+Edit `config.yaml` to match your environment:
 
 ```yaml
 llm:
-  base_url: "https://your-endpoint/v1"
-  api_key: "${LLM_API_KEY}"
-  model: "your-model"
-  reasoning_effort: "high"
+  base_url: "https://cloudgpt-openai.azure-api.net/"
+  api_version: "2025-04-01-preview"
+  model: "gpt-5.2-20251211"
+  max_tokens: 4096
+  reasoning_effort: "high"        # Controls model reasoning depth
+  max_concurrent_requests: 10
+  retry_attempts: 7               # Exponential backoff retries on transient errors
+  retry_delay_seconds: 5.0        # Base delay between retries (capped at 60s)
 
 pipeline:
-  concurrency: 5
+  concurrency: 3                  # Parallel task processing
   cache_dir: ".cache/llm_responses"
+  output_dir: "output"
+
+thresholds:
+  clean_max: 0.2
+  minor_max: 0.5
+  moderate_max: 0.8
 
 code_visitation:
-  enabled: true
+  enabled: true                   # Clone repos for full source context
   repo_cache_dir: ".cache/repos"
   clone_timeout_seconds: 120
   max_source_context_lines: 200
 ```
 
-## Architecture
+### Authentication
+
+bench-cleanser authenticates to Azure OpenAI via Azure CLI:
+
+```bash
+az login
+```
+
+## Usage
+
+### Full batch analysis (v2 pipeline)
+
+```bash
+python run_pipeline.py --v2 --dataset verified --max-tasks 500
+```
+
+### Single task analysis
+
+```bash
+python run_pipeline.py --v2 --instance-id django__django-15916
+```
+
+### v1 pipeline (legacy)
+
+```bash
+python run_pipeline.py --dataset verified --max-tasks 100
+```
+
+### CLI Options
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--v2` | Use v2 intent-matching pipeline (recommended) | v1 |
+| `--config PATH` | Path to configuration YAML file | `config.yaml` |
+| `--dataset {verified,lite,both}` | Which SWE-bench dataset(s) to analyze | `both` |
+| `--max-tasks N` | Maximum tasks per dataset | `500` |
+| `--instance-id ID` | Analyze a single instance (overrides `--dataset`) | -- |
+| `--output DIR` | Override output directory | from config |
+| `--concurrency N` | Parallel task processing | from config |
+| `-v, --verbose` | Enable DEBUG logging | off |
+
+## Output
+
+### Per-task JSON Report
+
+Each analyzed task produces a JSON report in `<output_dir>/reports/`:
+
+```json
+{
+  "instance_id": "django__django-15916",
+  "severity": "MODERATE",
+  "combined_score": 0.55,
+  "intent": {
+    "core_requirement": "Allow ModelForm Meta to specify formfield_callback",
+    "behavioral_contract": "BEFORE: ... AFTER: ...",
+    "acceptance_criteria": [
+      "modelform_factory preserves base form's callback"
+    ],
+    "out_of_scope": "Inheritance behavior of factory-produced forms",
+    "ambiguity_score": 0.3
+  },
+  "excess_patch": {
+    "score": 0.0,
+    "total_hunks": 1,
+    "required": 1,
+    "ancillary": 0,
+    "unrelated": 0,
+    "hunks": [
+      {
+        "hunk_index": 0,
+        "file": "django/forms/models.py",
+        "verdict": "REQUIRED",
+        "confidence": 0.95,
+        "reason": "Directly implements the described fix"
+      }
+    ]
+  },
+  "excess_test": {
+    "score": 0.33,
+    "total_tests": 1,
+    "aligned": 0,
+    "tangential": 1,
+    "unrelated": 0,
+    "total_assertions": 3,
+    "on_topic": 2,
+    "off_topic": 1,
+    "has_modified_tests": false,
+    "tests": [
+      {
+        "test_id": "tests/forms/test_modelform.py::test_custom_callback",
+        "test_name": "test_custom_callback",
+        "intent_match": "TANGENTIAL",
+        "assertions": [
+          {"statement": "assertEqual(widget, Textarea)", "verdict": "ON_TOPIC"},
+          {"statement": "assertEqual(callback_count, 1)", "verdict": "ON_TOPIC"},
+          {"statement": "assertIsInstance(form, InheritedForm)", "verdict": "OFF_TOPIC"}
+        ]
+      }
+    ]
+  },
+  "vague_spec": {
+    "score": 0.3,
+    "reasoning": "Mostly clear with minor edge cases undefined"
+  },
+  "recommendations": [
+    "EXCESS_TEST: 1/3 assertions test behavior beyond problem scope."
+  ]
+}
+```
+
+### Summary CSV
+
+Generated at `<output_dir>/summary.csv` with columns:
+
+```
+instance_id, severity, combined_score, excess_patch_score, excess_test_score,
+vague_spec_score, patch_hunks_total, patch_required, patch_ancillary,
+patch_unrelated, tests_total, tests_aligned, tests_tangential, tests_unrelated,
+assertions_total, assertions_on_topic, assertions_off_topic,
+has_modified_test, recommendations
+```
+
+### Summary Statistics
+
+Generated at `<output_dir>/summary_stats.json` with severity distribution, mean/median combined scores, and per-category averages.
+
+## Project Structure
 
 ```
 bench_cleanser/
-  models.py              # Data models (PipelineConfig, CodeContext, etc.)
-  data_loader.py         # SWE-bench dataset loading from HuggingFace
-  repo_manager.py        # Git clone caching and management
-  code_visitor.py        # Source code retrieval from cloned repos
-  static_analysis.py     # AST-based test analysis (calls, imports, assertions)
-  pipeline.py            # 7-stage orchestration
-  llm_client.py          # LLM API client with retry logic
-  cache.py               # Content-hash-based response caching
-  parsing/
-    patch_parser.py      # Gold patch diff parsing
-    test_parser.py       # Test patch diff parsing
+  __init__.py
+  models.py                      # Data models and enums (v1 + v2)
+  pipeline.py                    # Pipeline orchestrator (v1 + v2 batch/single)
+  llm_client.py                  # Azure OpenAI client with retry and caching
+  cache.py                       # Disk-based LLM response cache
+  data_loader.py                 # SWE-bench dataset loading (HuggingFace)
+  repo_manager.py                # Git repo cloning and management
+  code_visitor.py                # Source code extraction from cloned repos
+  static_analysis.py             # Python AST: imports, calls, assertions
   analysis/
-    scope_analyzer.py    # Stage 3: LLM scope analysis
-    patch_analyzer.py    # Stage 4: Per-hunk classification
-    test_analyzer.py     # Stage 5: F2P test alignment analysis
-    cross_ref.py         # Stage 6: Circular dependency detection
+    scope_analyzer.py            # Stage 2: Intent extraction (LLM)
+    structural_diff.py           # Stage 3: AST-level structural analysis
+    patch_analyzer.py            # Stage 4A: Patch-intent matching (LLM)
+    test_analyzer.py             # Stage 4B: Test-intent matching (LLM)
+    cross_ref.py                 # Cross-reference analysis (v1)
   classification/
-    taxonomy.py          # Contamination category definitions
-    scorer.py            # Composite scoring and severity classification
+    scorer.py                    # Stage 5: Scoring and report building (v1 + v2)
+    taxonomy.py                  # Category/verdict definitions and thresholds
+  parsing/
+    patch_parser.py              # Unified diff parser (gold patch)
+    test_parser.py               # Test patch parser + F2P matching
+tests/
+  test_scorer.py                 # Unit tests for scoring logic (v1 + v2)
+run_pipeline.py                  # CLI entry point
+config.yaml                      # Pipeline configuration
+cloudgpt.py                      # Azure AD token provider
+requirements.txt                 # Python dependencies
 ```
 
-## Results (SWE-bench Verified, first 100 tasks)
+## Error Handling
 
-| Severity | Count | Percentage |
-|----------|-------|------------|
-| CLEAN    | 9     | 9.0%       |
-| MINOR    | 67    | 67.0%      |
-| MODERATE | 11    | 11.0%      |
-| SEVERE   | 12    | 12.0%      |
+bench-cleanser is designed to **fail loud** rather than produce incorrect results:
 
-Mean contamination score: **0.418**
+- **LLM failures**: All transient errors (HTTP 500, rate limits, timeouts, connection errors) are retried with exponential backoff (base delay 5s, capped at 60s, up to 7 attempts). Non-retryable errors propagate immediately.
+- **No silent fallbacks**: If all LLM retries are exhausted, the pipeline raises `RuntimeError` rather than returning empty or degenerate results. Pipeline errors are surfaced as `SEVERE` reports with `PIPELINE_ERROR:` prefixes so they are visible in summary statistics.
+- **SDK retry disabled**: The OpenAI SDK's built-in retry mechanism is disabled (`max_retries=0`) to prevent dual-layer retry storms. All retry logic is handled by bench-cleanser's own backoff implementation.
+- **Caching**: Successful LLM responses are cached to disk. Subsequent runs reuse cached results, reducing API calls and enabling incremental reruns after transient failures.
 
-Top contamination categories detected:
-- AMBIGUOUS_SPEC: 99 tasks (most common -- problem statements often underspecify)
-- OVERPATCH: 20 tasks
-- OVERTEST: 8 tasks
-- SCOPE_CREEP: 6 tasks
-- TEST_DESC_MISALIGN: 6 tasks
-- SNEAKY_TEST_MOD: 5 tasks
-- CIRCULAR_DEPENDENCY: 1 task
+## Testing
+
+```bash
+python -m pytest tests/ -v
+```
+
+## v1 vs v2 Comparison
+
+| Aspect | v1 (7-category) | v2 (4-verdict) |
+|--------|-----------------|----------------|
+| Categories | 7 overlapping | 4 non-overlapping |
+| Taxonomy | OVERTEST, OVERPATCH, SNEAKY_TEST_MOD, SCOPE_CREEP, TEST_DESC_MISALIGN, CIRCULAR_DEP, AMBIGUOUS_SPEC | EXCESS_PATCH, EXCESS_TEST, VAGUE_SPEC, CLEAN |
+| Granularity | Hunk-level | Hunk + assertion-level |
+| Ground truth | Scope analysis | Intent extraction with acceptance criteria |
+| Structural analysis | Python AST only | Python AST with structural diff |
+| False positives | Known issues (aligned SNEAKY_TEST_MOD, doc-file heuristic) | Reduced via intent matching |
+| Output | Category confidence scores | Actionable per-hunk/per-assertion verdicts |

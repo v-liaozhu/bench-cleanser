@@ -13,7 +13,12 @@ from bench_cleanser.data_loader import (
     load_swebench_lite,
     load_swebench_verified,
 )
-from bench_cleanser.pipeline import load_config, run_pipeline, process_single_task
+from bench_cleanser.pipeline import (
+    load_config,
+    run_pipeline,
+    run_pipeline_v2,
+    process_single_task,
+)
 from bench_cleanser.cache import ResponseCache
 from bench_cleanser.llm_client import LLMClient
 
@@ -57,11 +62,91 @@ def _parse_args() -> argparse.Namespace:
         help="Number of tasks to process in parallel (overrides config)",
     )
     p.add_argument(
+        "--v2",
+        action="store_true",
+        help="Use v2 intent-matching pipeline (4-verdict taxonomy)",
+    )
+    p.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Enable verbose (DEBUG) logging",
     )
     return p.parse_args()
+
+
+def _print_v1_summary(reports: list) -> None:
+    """Print v1 summary to terminal."""
+    severity_counts = {"CLEAN": 0, "MINOR": 0, "MODERATE": 0, "SEVERE": 0}
+    for r in reports:
+        severity_counts[r.severity.value] += 1
+
+    print("\n=== bench-cleanser results ===")
+    print(f"Total tasks analysed: {len(reports)}")
+    for sev, count in severity_counts.items():
+        pct = (count / len(reports) * 100) if reports else 0
+        print(f"  {sev:10s}: {count:4d}  ({pct:.1f}%)")
+
+    mean_conf = (
+        sum(r.total_confidence for r in reports) / len(reports)
+        if reports
+        else 0.0
+    )
+    print(f"Mean contamination score: {mean_conf:.4f}")
+
+
+def _print_v2_summary(reports: list) -> None:
+    """Print v2 summary to terminal with rich formatting if available."""
+    severity_counts = {"CLEAN": 0, "MINOR": 0, "MODERATE": 0, "SEVERE": 0}
+    for r in reports:
+        severity_counts[r.severity.value] += 1
+
+    try:
+        from rich.console import Console
+        from rich.table import Table
+        from rich.panel import Panel
+
+        console = Console()
+
+        # Summary panel
+        table = Table(title="bench-cleanser v2 Results", show_header=True)
+        table.add_column("Severity", style="bold")
+        table.add_column("Count", justify="right")
+        table.add_column("Percentage", justify="right")
+
+        colors = {"CLEAN": "green", "MINOR": "yellow", "MODERATE": "orange3", "SEVERE": "red"}
+        for sev, count in severity_counts.items():
+            pct = (count / len(reports) * 100) if reports else 0
+            table.add_row(
+                f"[{colors[sev]}]{sev}[/{colors[sev]}]",
+                str(count),
+                f"{pct:.1f}%",
+            )
+
+        console.print()
+        console.print(table)
+
+        # Score summary
+        mean_combined = sum(r.combined_score for r in reports) / len(reports) if reports else 0.0
+        mean_ep = sum(r.excess_patch.score for r in reports) / len(reports) if reports else 0.0
+        mean_et = sum(r.excess_test.score for r in reports) / len(reports) if reports else 0.0
+        mean_vs = sum(r.vague_spec.score for r in reports) / len(reports) if reports else 0.0
+
+        console.print(f"\n  Total tasks: {len(reports)}")
+        console.print(f"  Mean combined score:    {mean_combined:.4f}")
+        console.print(f"  Mean EXCESS_PATCH:      {mean_ep:.4f}")
+        console.print(f"  Mean EXCESS_TEST:       {mean_et:.4f}")
+        console.print(f"  Mean VAGUE_SPEC:        {mean_vs:.4f}")
+
+    except ImportError:
+        # Fallback to plain text
+        print("\n=== bench-cleanser v2 results ===")
+        print(f"Total tasks analysed: {len(reports)}")
+        for sev, count in severity_counts.items():
+            pct = (count / len(reports) * 100) if reports else 0
+            print(f"  {sev:10s}: {count:4d}  ({pct:.1f}%)")
+
+        mean_combined = sum(r.combined_score for r in reports) / len(reports) if reports else 0.0
+        print(f"Mean combined score: {mean_combined:.4f}")
 
 
 def main() -> None:
@@ -102,25 +187,14 @@ def main() -> None:
     logging.info("Loaded %d task(s)", len(records))
 
     # Run pipeline
-    reports = asyncio.run(run_pipeline(records, config))
+    if args.v2:
+        logging.info("Using v2 intent-matching pipeline")
+        reports = asyncio.run(run_pipeline_v2(records, config))
+        _print_v2_summary(reports)
+    else:
+        reports = asyncio.run(run_pipeline(records, config))
+        _print_v1_summary(reports)
 
-    # Print summary
-    severity_counts = {"CLEAN": 0, "MINOR": 0, "MODERATE": 0, "SEVERE": 0}
-    for r in reports:
-        severity_counts[r.severity.value] += 1
-
-    print("\n=== bench-cleanser results ===")
-    print(f"Total tasks analysed: {len(reports)}")
-    for sev, count in severity_counts.items():
-        pct = (count / len(reports) * 100) if reports else 0
-        print(f"  {sev:10s}: {count:4d}  ({pct:.1f}%)")
-
-    mean_conf = (
-        sum(r.total_confidence for r in reports) / len(reports)
-        if reports
-        else 0.0
-    )
-    print(f"Mean contamination score: {mean_conf:.4f}")
     print(f"Output written to: {config.output_dir}/")
 
 

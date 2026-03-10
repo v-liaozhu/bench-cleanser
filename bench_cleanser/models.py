@@ -9,7 +9,7 @@ from typing import Any
 
 
 class ContaminationCategory(str, Enum):
-    """Taxonomy of benchmark contamination types."""
+    """Taxonomy of benchmark contamination types (v1 — 7 categories)."""
     OVERTEST = "OVERTEST"
     OVERPATCH = "OVERPATCH"
     SNEAKY_TEST_MOD = "SNEAKY_TEST_MOD"
@@ -17,6 +17,37 @@ class ContaminationCategory(str, Enum):
     TEST_DESC_MISALIGN = "TEST_DESC_MISALIGN"
     CIRCULAR_DEPENDENCY = "CIRCULAR_DEPENDENCY"
     AMBIGUOUS_SPEC = "AMBIGUOUS_SPEC"
+
+
+# ── v2 Taxonomy: 4 Verdict Categories ────────────────────────────────
+
+
+class VerdictCategory(str, Enum):
+    """v2 taxonomy: non-overlapping, actionable verdict categories."""
+    EXCESS_PATCH = "EXCESS_PATCH"    # Gold patch includes changes beyond task scope
+    EXCESS_TEST = "EXCESS_TEST"      # F2P tests verify behavior beyond task scope
+    VAGUE_SPEC = "VAGUE_SPEC"        # Problem statement is ambiguous
+    CLEAN = "CLEAN"                  # No contamination detected
+
+
+class PatchVerdict(str, Enum):
+    """Per-hunk verdict for gold patch intent matching."""
+    REQUIRED = "REQUIRED"        # Directly implements the described fix
+    ANCILLARY = "ANCILLARY"      # Supports the fix but isn't described (imports, infra)
+    UNRELATED = "UNRELATED"      # Changes behavior not described in the problem
+
+
+class TestVerdict(str, Enum):
+    """Per-test verdict for F2P test intent matching."""
+    ALIGNED = "ALIGNED"          # Test targets the described problem
+    TANGENTIAL = "TANGENTIAL"    # Test partially targets the problem
+    UNRELATED = "UNRELATED"      # Test doesn't target the described problem
+
+
+class AssertionVerdict(str, Enum):
+    """Per-assertion verdict for F2P test intent matching."""
+    ON_TOPIC = "ON_TOPIC"        # Assertion checks behavior described in the problem
+    OFF_TOPIC = "OFF_TOPIC"      # Assertion checks behavior NOT described in the problem
 
 
 class Severity(str, Enum):
@@ -354,6 +385,230 @@ class ContaminationReport:
         }
 
 
+# ── v2 Models ─────────────────────────────────────────────────────────
+
+
+@dataclass
+class IntentStatement:
+    """Ground truth intent extracted from the problem statement (Stage 2 v2).
+
+    The acceptance_criteria list is the key addition: explicit testable behaviors
+    that the problem description asks for.  This becomes the reference for
+    matching patches and tests against the described intent.
+    """
+    instance_id: str
+    core_requirement: str              # What must change
+    behavioral_contract: str           # How behavior should differ after fix
+    acceptance_criteria: list[str]     # Specific verifiable claims from description
+    out_of_scope: str                  # What is NOT asked for
+    ambiguity_score: float             # 0-1
+    raw_llm_response: str = ""
+
+
+@dataclass
+class ChangedBlock:
+    """A source code block changed by the gold patch (Stage 3 v2)."""
+    file_path: str
+    block_name: str            # function/class name
+    block_type: str            # "function", "class", "method", "statement"
+    edit_status: str           # "INSERT", "DELETE", "UPDATE" (from astred_core)
+    pre_source: str = ""       # source before patch
+    post_source: str = ""      # source after patch
+
+
+@dataclass
+class AssertionDetail:
+    """A single assertion extracted from a test function."""
+    statement: str             # full assertion source line
+    verdict: AssertionVerdict = AssertionVerdict.ON_TOPIC
+    reason: str = ""
+
+
+@dataclass
+class TestBlock:
+    """An F2P test function with extracted assertions (Stage 3 v2)."""
+    test_id: str
+    test_name: str
+    file_path: str
+    full_source: str
+    assertions: list[AssertionDetail] = field(default_factory=list)
+    called_functions: list[str] = field(default_factory=list)  # names of functions called
+
+
+@dataclass
+class StructuralDiff:
+    """Structural analysis output from astred_core (Stage 3 v2)."""
+    instance_id: str
+    changed_blocks: list[ChangedBlock]       # Functions/classes changed by gold patch
+    test_blocks: list[TestBlock]             # F2P test functions with assertions
+    call_edges: list[tuple[str, str]]        # (test_function, changed_function) pairs
+    astred_available: bool = True            # False if fell back to Python ast
+
+
+# ── v2 Verdict Reports ───────────────────────────────────────────────
+
+
+@dataclass
+class HunkVerdict:
+    """Intent-matching verdict for a single gold patch hunk (Stage 4A v2)."""
+    hunk_index: int
+    file_path: str
+    verdict: PatchVerdict
+    confidence: float
+    reasoning: str
+    is_heuristic: bool = False
+
+
+@dataclass
+class AssertionVerdictReport:
+    """Intent-matching verdict for a single assertion within an F2P test."""
+    statement: str
+    verdict: AssertionVerdict
+    reason: str = ""
+
+
+@dataclass
+class TestVerdictReport:
+    """Intent-matching verdict for a single F2P test (Stage 4B v2)."""
+    test_id: str
+    test_name: str
+    intent_match: TestVerdict
+    confidence: float
+    reasoning: str
+    is_modified: bool                        # Was test pre-existing and modified?
+    modification_aligned: bool = True        # If modified, is the modification aligned?
+    assertion_verdicts: list[AssertionVerdictReport] = field(default_factory=list)
+
+    @property
+    def on_topic_count(self) -> int:
+        return sum(1 for a in self.assertion_verdicts if a.verdict == AssertionVerdict.ON_TOPIC)
+
+    @property
+    def off_topic_count(self) -> int:
+        return sum(1 for a in self.assertion_verdicts if a.verdict == AssertionVerdict.OFF_TOPIC)
+
+
+@dataclass
+class ExcessPatchDetail:
+    """Detailed EXCESS_PATCH scoring breakdown."""
+    score: float
+    total_hunks: int
+    required_count: int
+    ancillary_count: int
+    unrelated_count: int
+    hunk_verdicts: list[HunkVerdict] = field(default_factory=list)
+
+
+@dataclass
+class ExcessTestDetail:
+    """Detailed EXCESS_TEST scoring breakdown."""
+    score: float
+    total_tests: int
+    aligned_count: int
+    tangential_count: int
+    unrelated_count: int
+    total_assertions: int
+    on_topic_assertions: int
+    off_topic_assertions: int
+    has_modified_tests: bool
+    test_verdicts: list[TestVerdictReport] = field(default_factory=list)
+
+
+@dataclass
+class VagueSpecDetail:
+    """Detailed VAGUE_SPEC scoring breakdown."""
+    score: float
+    reasoning: str = ""
+
+
+@dataclass
+class VerdictScore:
+    """Confidence score for a single v2 verdict category."""
+    category: VerdictCategory
+    confidence: float
+    evidence: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ContaminationReportV2:
+    """v2 contamination report with intent-matching verdicts."""
+    instance_id: str
+    severity: Severity
+    combined_score: float
+    intent: IntentStatement
+    excess_patch: ExcessPatchDetail
+    excess_test: ExcessTestDetail
+    vague_spec: VagueSpecDetail
+    categories: dict[str, VerdictScore] = field(default_factory=dict)
+    recommendations: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict."""
+        return {
+            "instance_id": self.instance_id,
+            "severity": self.severity.value,
+            "combined_score": round(self.combined_score, 4),
+            "intent": {
+                "core_requirement": self.intent.core_requirement,
+                "behavioral_contract": self.intent.behavioral_contract,
+                "acceptance_criteria": self.intent.acceptance_criteria,
+                "out_of_scope": self.intent.out_of_scope,
+                "ambiguity_score": round(self.intent.ambiguity_score, 4),
+            },
+            "excess_patch": {
+                "score": round(self.excess_patch.score, 4),
+                "total_hunks": self.excess_patch.total_hunks,
+                "required": self.excess_patch.required_count,
+                "ancillary": self.excess_patch.ancillary_count,
+                "unrelated": self.excess_patch.unrelated_count,
+                "hunks": [
+                    {
+                        "hunk_index": h.hunk_index,
+                        "file": h.file_path,
+                        "verdict": h.verdict.value,
+                        "confidence": round(h.confidence, 4),
+                        "reason": h.reasoning,
+                    }
+                    for h in self.excess_patch.hunk_verdicts
+                ],
+            },
+            "excess_test": {
+                "score": round(self.excess_test.score, 4),
+                "total_tests": self.excess_test.total_tests,
+                "aligned": self.excess_test.aligned_count,
+                "tangential": self.excess_test.tangential_count,
+                "unrelated": self.excess_test.unrelated_count,
+                "total_assertions": self.excess_test.total_assertions,
+                "on_topic": self.excess_test.on_topic_assertions,
+                "off_topic": self.excess_test.off_topic_assertions,
+                "has_modified_tests": self.excess_test.has_modified_tests,
+                "tests": [
+                    {
+                        "test_id": t.test_id,
+                        "test_name": t.test_name,
+                        "intent_match": t.intent_match.value,
+                        "is_modified": t.is_modified,
+                        "modification_aligned": t.modification_aligned,
+                        "assertions": [
+                            {
+                                "statement": a.statement,
+                                "verdict": a.verdict.value,
+                                "reason": a.reason,
+                            }
+                            for a in t.assertion_verdicts
+                        ],
+                    }
+                    for t in self.excess_test.test_verdicts
+                ],
+            },
+            "vague_spec": {
+                "score": round(self.vague_spec.score, 4),
+                "reasoning": self.vague_spec.reasoning,
+            },
+            "recommendations": self.recommendations,
+        }
+
+
 @dataclass
 class PipelineConfig:
     """Configuration for the pipeline."""
@@ -363,8 +618,8 @@ class PipelineConfig:
     llm_max_tokens: int = 4096
     llm_reasoning_effort: str = "high"
     max_concurrent_requests: int = 10
-    retry_attempts: int = 3
-    retry_delay_seconds: float = 2.0
+    retry_attempts: int = 7
+    retry_delay_seconds: float = 5.0
     concurrency: int = 5
     cache_dir: str = ".cache/llm_responses"
     output_dir: str = "output"

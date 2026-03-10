@@ -12,12 +12,18 @@ from typing import Any
 
 from bench_cleanser.llm_client import LLMClient
 from bench_cleanser.models import (
+    ChangedBlock,
+    ExcessPatchDetail,
     HunkClassification,
     HunkReport,
+    HunkVerdict,
+    IntentStatement,
     ParsedTask,
     PatchAnalysis,
     PatchHunk,
+    PatchVerdict,
     ScopeAnalysis,
+    StructuralDiff,
 )
 from bench_cleanser.parsing.patch_parser import hunk_is_import_only
 
@@ -172,4 +178,187 @@ async def analyze_patch(
         borderline_count=borderline,
         infrastructure_count=infrastructure,
         overpatch_score=overpatch_score,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v2 Intent Matching: REQUIRED / ANCILLARY / UNRELATED
+# ═══════════════════════════════════════════════════════════════════════
+
+
+PATCH_INTENT_SYSTEM_PROMPT = """\
+You are an expert software engineer performing **intent matching** between a
+problem description and a code change.
+
+You are given:
+  1. The ground truth **intent** extracted from the problem statement — including
+     core requirement, behavioral contract, acceptance criteria, and out-of-scope.
+  2. A single hunk from the gold (reference) patch with its diff.
+  3. Optionally, the full source of the function/class being modified (from
+     structural analysis).
+
+Your task: Classify this hunk as one of:
+
+  **REQUIRED**: The change directly implements behavior described in the
+    acceptance criteria.  A correct solution MUST include this change (or an
+    equivalent).  Examples: fixing the reported bug, adding the requested
+    feature, updating the specific function mentioned.
+
+  **ANCILLARY**: The change supports the fix but is NOT described in the problem.
+    It is reasonable infrastructure.  Examples: adding imports for new code,
+    updating __init__.py exports, adding type annotations for changed functions,
+    adjusting configuration that enables the fix.
+
+  **UNRELATED**: The change modifies behavior that is NOT described in the
+    problem statement and NOT required to support the fix.  Examples:
+    refactoring other code, fixing unrelated bugs, adding unrelated features,
+    changing documentation, style changes to untouched code.
+
+Important guidelines:
+- Focus on the ACCEPTANCE CRITERIA — each criterion is a specific testable behavior
+  from the problem statement.
+- A hunk is REQUIRED only if removing it would break at least one acceptance criterion.
+- Infrastructure changes (imports, __init__.py, test config) are ANCILLARY, not UNRELATED.
+- When uncertain between REQUIRED and ANCILLARY, prefer REQUIRED.
+- When uncertain between ANCILLARY and UNRELATED, prefer ANCILLARY.
+
+Respond in JSON:
+{
+  "verdict": "REQUIRED|ANCILLARY|UNRELATED",
+  "confidence": <float 0.0-1.0>,
+  "reasoning": "<brief explanation citing specific acceptance criteria if applicable>"
+}
+"""
+
+
+def _build_intent_hunk_prompt(
+    intent: IntentStatement,
+    hunk: PatchHunk,
+    structural_context: str = "",
+) -> str:
+    """Build user prompt for v2 patch intent matching."""
+    parts: list[str] = []
+
+    parts.append(
+        "=== INTENT (from problem statement only) ===\n"
+        f"Core requirement: {intent.core_requirement}\n"
+        f"Behavioral contract: {intent.behavioral_contract}\n"
+        f"Acceptance criteria:\n"
+        + "\n".join(f"  - {c}" for c in intent.acceptance_criteria) + "\n"
+        f"Out of scope: {intent.out_of_scope}"
+    )
+
+    parts.append(
+        "=== PATCH HUNK ===\n"
+        f"File: {hunk.file_path}\n"
+        f"Function context: {hunk.function_context}\n"
+        f"Lines added: {len(hunk.added_lines)}\n"
+        f"Lines removed: {len(hunk.removed_lines)}\n\n"
+        f"Diff:\n{hunk.raw_diff}"
+    )
+
+    if structural_context:
+        parts.append(
+            "=== STRUCTURAL CONTEXT (full function source) ===\n"
+            + structural_context
+        )
+
+    return "\n\n".join(parts)
+
+
+def _apply_heuristics_v2(hunk: PatchHunk) -> HunkVerdict | None:
+    """Heuristic pre-filters for v2 patch verdicts."""
+    if hunk.is_init_file and hunk_is_import_only(hunk):
+        return HunkVerdict(
+            hunk_index=hunk.hunk_index,
+            file_path=hunk.file_path,
+            verdict=PatchVerdict.ANCILLARY,
+            confidence=0.95,
+            reasoning="__init__.py hunk with only import/export changes",
+            is_heuristic=True,
+        )
+
+    if hunk.is_doc_file:
+        return HunkVerdict(
+            hunk_index=hunk.hunk_index,
+            file_path=hunk.file_path,
+            verdict=PatchVerdict.UNRELATED,
+            confidence=0.90,
+            reasoning="Change in documentation/changelog file",
+            is_heuristic=True,
+        )
+
+    return None
+
+
+async def _classify_hunk_v2(
+    hunk: PatchHunk,
+    intent: IntentStatement,
+    llm: LLMClient,
+    structural_diff: StructuralDiff | None = None,
+) -> HunkVerdict:
+    """Classify a single hunk using v2 intent matching."""
+    heuristic = _apply_heuristics_v2(hunk)
+    if heuristic is not None:
+        return heuristic
+
+    # Find structural context for this hunk
+    structural_context = ""
+    if structural_diff:
+        for cb in structural_diff.changed_blocks:
+            if cb.file_path == hunk.file_path and cb.pre_source:
+                structural_context += f"--- {cb.block_name} ({cb.block_type}, {cb.edit_status}) ---\n"
+                structural_context += cb.pre_source + "\n\n"
+
+    user_prompt = _build_intent_hunk_prompt(intent, hunk, structural_context)
+    result = await llm.query_json(PATCH_INTENT_SYSTEM_PROMPT, user_prompt)
+
+    verdict_str = result.get("verdict", "ANCILLARY")
+    try:
+        verdict = PatchVerdict(verdict_str)
+    except ValueError:
+        verdict = PatchVerdict.ANCILLARY
+
+    return HunkVerdict(
+        hunk_index=hunk.hunk_index,
+        file_path=hunk.file_path,
+        verdict=verdict,
+        confidence=float(result.get("confidence", 0.5)),
+        reasoning=result.get("reasoning", ""),
+        is_heuristic=False,
+    )
+
+
+async def analyze_patch_v2(
+    parsed: ParsedTask,
+    intent: IntentStatement,
+    llm: LLMClient,
+    structural_diff: StructuralDiff | None = None,
+) -> ExcessPatchDetail:
+    """Run v2 patch intent matching on all hunks in the gold patch.
+
+    Returns ExcessPatchDetail with per-hunk REQUIRED/ANCILLARY/UNRELATED
+    verdicts and the computed excess_patch_score.
+    """
+    hunk_verdicts: list[HunkVerdict] = []
+
+    for hunk in parsed.patch_hunks:
+        verdict = await _classify_hunk_v2(hunk, intent, llm, structural_diff)
+        hunk_verdicts.append(verdict)
+
+    required = sum(1 for v in hunk_verdicts if v.verdict == PatchVerdict.REQUIRED)
+    ancillary = sum(1 for v in hunk_verdicts if v.verdict == PatchVerdict.ANCILLARY)
+    unrelated = sum(1 for v in hunk_verdicts if v.verdict == PatchVerdict.UNRELATED)
+    total = len(hunk_verdicts) or 1
+
+    # Score: unrelated counts fully, ancillary counts half
+    score = (unrelated + 0.5 * ancillary) / total
+
+    return ExcessPatchDetail(
+        score=score,
+        total_hunks=len(hunk_verdicts),
+        required_count=required,
+        ancillary_count=ancillary,
+        unrelated_count=unrelated,
+        hunk_verdicts=hunk_verdicts,
     )
