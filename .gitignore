@@ -13,17 +13,22 @@ build/
 venv/
 env/
 
-# Cache directories
+# Cache directories (LLM responses, git clones)
 .cache/
 
-# Output directories (generated data, not source)
+# Pipeline output directories (generated, not source).
+# Promote a curated subset to examples/ if you want to ship it.
 output/
 output_*/
-!output_pro_v6/
-!output_pro_v6/**
 results/
 
-# IDE
+# Research/case-study artefacts (kept on disk, but not in source control —
+# they are large, evolve per-run, and rebuild from the pipeline).
+audits/
+case_studies/
+slides/
+
+# IDE / editor
 .vscode/
 .idea/
 *.swp
@@ -32,24 +37,31 @@ results/
 # OS
 .DS_Store
 Thumbs.db
-NUL
 
 # Azure AD token cache
 *.bin
 cloudgpt-apim-token-cache.*
 
-# Claude Code temp files
-tmpclaude-*
-agent_results.json
-
-# Stale analysis output
-analysis_v3/
-
 # Debug logs
 *.log
+*_log.txt
+*_run.log
 
-# Scratch/audit scripts and working data
-_*.py
-_*/
-_*.json
-_*.md
+# Claude Code / agent temp files
+tmpclaude-*
+agent_results.json
+.claude/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Scratch / working files at the repo root (e.g. _dump_one.py, _scratch.md).
+# Anchored with `/` so they do NOT match legitimate underscored package
+# directories like `bench_cleanser/_internal/`.
+/_*.py
+/_*/
+/_*.json
+/_*.md
