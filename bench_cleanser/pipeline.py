@@ -342,12 +342,18 @@ async def run_pipeline(
     severity_counts = {"CLEAN": 0, "MINOR": 0, "MODERATE": 0, "SEVERE": 0}
 
     try:
-        from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
-        from rich.live import Live
-        from rich.table import Table
-        from rich.panel import Panel
-        from rich.layout import Layout
         from rich.console import Console
+        from rich.progress import (
+            BarColumn,
+            MofNCompleteColumn,
+            Progress,
+            SpinnerColumn,
+            TaskProgressColumn,
+            TextColumn,
+            TimeElapsedColumn,
+            TimeRemainingColumn,
+        )
+        from rich.table import Table
         use_rich = True
     except ImportError:
         use_rich = False
@@ -387,8 +393,17 @@ async def run_pipeline(
             return report
 
     if use_rich:
-        from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
         from rich.console import Console
+        from rich.progress import (
+            BarColumn,
+            MofNCompleteColumn,
+            Progress,
+            SpinnerColumn,
+            TaskProgressColumn,
+            TextColumn,
+            TimeElapsedColumn,
+            TimeRemainingColumn,
+        )
         console = Console()
         with Progress(
             SpinnerColumn(),

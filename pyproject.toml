@@ -1,0 +1,118 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bench-cleanser"
+version = "1.0.0"
+description = "Automated contamination, fairness, and trajectory-leakage analysis for SWE-bench family benchmarks."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "v-liaozhu" }]
+keywords = [
+    "swe-bench",
+    "benchmark",
+    "contamination",
+    "evaluation",
+    "llm",
+    "agent",
+    "ai-safety",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+    "datasets>=2.14.0",
+    "openai>=1.0.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.65.0",
+    "azure-identity>=1.15.0",
+    "azure-identity-broker>=1.1.0",
+    "msal>=1.26.0",
+    "requests>=2.31.0",
+    "pandas>=2.0.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+trajectory = ["docent-python>=0.1.0"]
+# Structural-diff path uses astred_core (.NET-backed multilingual AST).
+# Install separately if you want astred precision; pipeline falls back to
+# Python stdlib `ast` when not present.
+structural = ["astred-core"]
+dev = [
+    "pytest>=7",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.urls]
+Homepage = "https://github.com/v-liaozhu/bench-cleanser"
+Repository = "https://github.com/v-liaozhu/bench-cleanser"
+Issues = "https://github.com/v-liaozhu/bench-cleanser/issues"
+Changelog = "https://github.com/v-liaozhu/bench-cleanser/blob/master/CHANGELOG.md"
+
+[project.scripts]
+bench-cleanser = "bench_cleanser.cli:main"
+bench-cleanser-trajectory = "bench_cleanser.cli:trajectory_main"
+bench-cleanser-deep-dive = "bench_cleanser.cli:deep_dive_main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["bench_cleanser"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"bench_cleanser/prompts" = "bench_cleanser/prompts"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["output*", "audits", "case_studies", "slides", ".cache"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E501",   # line length handled by formatter
+    "B008",   # function calls in argument defaults (Pydantic Field)
+    "E731",   # lambda assignment (occasionally clearer than def)
+    "E741",   # ambiguous variable names (l, I, O) — common in math/logic code
+    "F541",   # f-strings without placeholders — fine when used for parity
+    "B904",   # `raise X from Y` — fine to leave bare in narrow contexts
+    "B905",   # `zip(..., strict=...)` — verbose for simple paired iteration
+    "B007",   # loop variable not used in body — fine for index-only loops
+    "UP006",  # PEP 585 (list[str] etc.) — already used; some legacy spots remain
+    "UP007",  # PEP 604 (X | None) — same
+    "UP037",  # quoted annotations — left intentionally where forward refs help
+    "UP042",  # StrEnum migration — deliberate (str, Enum) for legacy JSON serialization
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402", "F401", "F841"]
+"bench_cleanser/__init__.py" = ["F401"]   # re-exports
+"bench_cleanser/_internal/cloudgpt.py" = ["ALL"]   # vendored, intentionally untouched
+"bench_cleanser/code_visitor.py" = ["E402"]   # internal forward-decl import pattern
+"bench_cleanser/analysis/structural_diff.py" = ["F401"]   # try-import probe for astred_core
+
+[tool.mypy]
+python_version = "3.11"
+warn_redundant_casts = true
+warn_unused_ignores = true
+ignore_missing_imports = true

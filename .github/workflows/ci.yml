@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  test:
+    name: pytest + ruff (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package + dev extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Lint (ruff)
+        run: ruff check bench_cleanser tests
+
+      - name: Tests (pytest)
+        env:
+          # Tests must not reach out to the network or to Azure.
+          # Any test that needs the LLM uses tests.conftest.FakeLLMClient.
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "0"
+        run: pytest tests/ -q --tb=short

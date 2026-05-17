@@ -12,9 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
-import sys
 from typing import Any, TypeVar
 
 import openai
@@ -83,12 +81,7 @@ def _create_async_client(
     """
     import time
 
-    # Add the project root to sys.path so cloudgpt.py can be imported
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if project_root not in sys.path:
-        sys.path.insert(0, project_root)
-
-    from cloudgpt_aoai import get_openai_token_provider
+    from bench_cleanser._internal.cloudgpt import get_openai_token_provider
 
     raw_provider = get_openai_token_provider(
         use_azure_cli=True,

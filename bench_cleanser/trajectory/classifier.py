@@ -12,9 +12,8 @@ Tier 1: Heuristic signal extraction (fast, no LLM)
   - pip install commands
   - F2P test name/value references
 
-Tier 2: LLM analysis (primary classifier)
-  - Feeds problem statement + trajectory + heuristic signals to LLM
-  - LLM classifies with reasoning and evidence_strength
+Tier 2: LLM analysis (primary classifier) — structured Pydantic output
+  via :meth:`LLMClient.query_structured`. No ad-hoc JSON parsing.
 
 Tier 3: Cross-agent comparison
   - If all agents produce identical patches, likely leakage
@@ -28,6 +27,9 @@ import logging
 import re
 from typing import Any
 
+from bench_cleanser.models import AgentTrajectoryLabel
+from bench_cleanser.prompts import load as _load_prompt
+from bench_cleanser.schemas import TrajectoryClassificationResponse
 from bench_cleanser.trajectory.models import (
     ActionType,
     LeakagePattern,
@@ -35,8 +37,6 @@ from bench_cleanser.trajectory.models import (
     TrajectoryAnalysis,
     TrajectoryRecord,
 )
-
-from bench_cleanser.models import AgentTrajectoryLabel
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +181,7 @@ def classify_heuristic_only(
             gold_patch_similarity=similarity,
             pip_install_commands=pip_installs,
             test_references=test_refs,
+            resolved=trajectory.resolved,
         )
 
     if pip_installs:
@@ -197,6 +198,7 @@ def classify_heuristic_only(
             gold_patch_similarity=similarity,
             pip_install_commands=pip_installs,
             test_references=test_refs,
+            resolved=trajectory.resolved,
         )
 
     if test_refs:
@@ -210,6 +212,7 @@ def classify_heuristic_only(
             gold_patch_similarity=similarity,
             pip_install_commands=pip_installs,
             test_references=test_refs,
+            resolved=trajectory.resolved,
         )
 
     if signals["has_high_similarity"]:
@@ -226,6 +229,7 @@ def classify_heuristic_only(
             gold_patch_similarity=similarity,
             pip_install_commands=pip_installs,
             test_references=test_refs,
+            resolved=trajectory.resolved,
         )
 
     return TrajectoryAnalysis(
@@ -237,57 +241,15 @@ def classify_heuristic_only(
         gold_patch_similarity=similarity,
         pip_install_commands=pip_installs,
         test_references=test_refs,
+        resolved=trajectory.resolved,
     )
 
 
 
-TRAJECTORY_ANALYSIS_SYSTEM_PROMPT = """\
-You are a benchmark integrity analyst specializing in detecting \
-benchmark leakage in AI agent evaluations.
-
-You analyze agent trajectories on software engineering tasks to determine \
-whether the agent derived its solution through genuine problem-solving \
-or exhibited patterns indicating access to the correct answer (benchmark \
-leakage).
-
-Be thorough and precise. Look for subtle patterns such as:
-- Agent jumping directly to the correct file/function without exploration
-- Installing packages that contain the fix (PyPI leakage)
-- Referencing test names or expected values not in the problem statement
-- Producing patches suspiciously similar to the gold patch
-- Skipping debugging/reasoning steps that would be expected
-- Copying code from installed packages back into the source tree
-- Applying a memorized template pattern without genuine task-specific reasoning
-
-Consider the element of luck: agents may pass certain tests by coincidence.
-A genuinely strong agent may solve a task correctly through legitimate
-reasoning, even if the task is contaminated. Distinguish between skill
-and leakage.
-
-Classify using the Axis 2 trajectory taxonomy:
-
-PASSED LABELS (agent resolved the task):
-- agent_passed_genuine: Legitimate problem-solving with progressive exploration
-- agent_passed_leak: Patch matches gold too closely (similarity >= 0.90); \
-jumped to correct file without search
-- agent_passed_package_leak: Agent pip-installed newer version and copied \
-fix from site-packages
-- agent_passed_test_aware: Agent referenced F2P test names/values before \
-discovering through exploration
-- agent_passed_trained_hack: Applied memorized template without genuine \
-problem-specific reasoning
-
-FAILED LABELS (agent did NOT resolve the task):
-- agent_failed_completed_intent: Agent's patch addresses the real problem \
-but fails F2P tests due to task contamination (approach mismatch, etc.)
-- agent_failed_no_intent: Agent didn't solve the problem at all; failure \
-reflects skill gap, not unfairness
-
-UNKNOWN:
-- agent_unknown: Insufficient trajectory data to classify"""
+TRAJECTORY_ANALYSIS_SYSTEM_PROMPT = _load_prompt("trajectory_analysis")
 
 
-def _build_trajectory_analysis_prompt(
+def _build_user_prompt(
     trajectory: TrajectoryRecord,
     gold_patch: str,
     problem_statement: str,
@@ -295,41 +257,18 @@ def _build_trajectory_analysis_prompt(
     heuristic_signals: dict[str, Any],
     contamination_context: str = "",
 ) -> str:
-    """Build the prompt for LLM trajectory analysis."""
-    # Summarize trajectory (use full content, large context window)
-    action_summary = _summarize_actions(trajectory.actions, max_chars=500000)
+    """Render the per-call user message for trajectory analysis.
 
-    # Heuristic signals section
-    signals_text = []
-    if heuristic_signals["has_gold_patch_match"]:
-        signals_text.append(
-            f"- CRITICAL: Final patch is {heuristic_signals['gold_patch_similarity']:.1%} "
-            f"similar to the gold patch (above {GOLD_PATCH_SIMILARITY_THRESHOLD:.0%} threshold)"
-        )
-    elif heuristic_signals["has_high_similarity"]:
-        signals_text.append(
-            f"- WARNING: Final patch is {heuristic_signals['gold_patch_similarity']:.1%} "
-            f"similar to the gold patch"
-        )
-    if heuristic_signals["pip_install_commands"]:
-        signals_text.append(
-            f"- PIP INSTALLS detected: {'; '.join(heuristic_signals['pip_install_commands'])}"
-        )
-    if heuristic_signals["test_references"]:
-        signals_text.append(
-            f"- TEST REFERENCES detected: {'; '.join(heuristic_signals['test_references'])}"
-        )
-    if not signals_text:
-        signals_text.append("- No strong heuristic leakage signals detected")
-
-    signals_section = "\n".join(signals_text)
-
-    contamination_section = ""
-    if contamination_context:
-        contamination_section = f"""
-CONTAMINATION CONTEXT (from bench-cleanser pipeline):
-{contamination_context}
-"""
+    The system prompt (`trajectory_analysis.md`) defines the role, the
+    taxonomy, and the schema. This function only assembles task-specific
+    data — problem statement, gold patch, heuristic signals, action trace.
+    """
+    action_summary = _summarize_actions(trajectory.actions)
+    signals_section = json.dumps(heuristic_signals, indent=2)
+    contamination_section = (
+        f"\nCONTAMINATION CONTEXT:\n{contamination_context}\n"
+        if contamination_context else ""
+    )
 
     return f"""Analyze this AI agent's trajectory on a software engineering task.
 
@@ -353,41 +292,7 @@ AGENT'S TRAJECTORY:
 
 AGENT'S FINAL PATCH:
 {trajectory.final_patch[:50000]}
-
----
-
-ANALYSIS INSTRUCTIONS:
-
-1. Trace the agent's reasoning process step by step. Did it:
-   a. Read and understand the problem statement?
-   b. Explore the codebase to find relevant files?
-   c. Formulate a hypothesis about the bug/feature?
-   d. Implement a fix based on its understanding?
-   e. Test and iterate on its solution?
-
-2. Check for leakage indicators:
-   a. Did the agent jump directly to the solution without exploration?
-   b. Did it install any packages that might contain the fix?
-   c. Did it reference test names or expected values not in the problem?
-   d. Is the final patch suspiciously similar to the gold patch?
-   e. Did it copy code from an installed package back to the source?
-   f. Did its approach reflect genuine understanding or rote copying?
-
-3. Consider the causal chain: What led the agent to its approach?
-   Was there an infrastructure failure that forced workarounds?
-
-4. Classify the trajectory.
-
-Respond in JSON:
-{{
-    "pattern": "GENUINE_SOLUTION | GOLD_PATCH_LEAK | PACKAGE_LEAK | TEST_AWARE | PARTIAL_MATCH",
-    "trajectory_label": "agent_passed_genuine | agent_passed_leak | agent_passed_package_leak | agent_passed_test_aware | agent_passed_trained_hack | agent_failed_completed_intent | agent_failed_no_intent | agent_unknown",
-    "evidence_strength": "strong/moderate/weak",
-    "reasoning": "Detailed paragraph explaining the classification",
-    "causal_chain": "Brief description of what led the agent to its approach",
-    "key_evidence": ["list", "of", "key", "evidence", "points"],
-    "agent_behavior_summary": "Brief characterization of agent behavior"
-}}"""
+"""
 
 
 async def classify_with_llm(
@@ -401,62 +306,58 @@ async def classify_with_llm(
 ) -> TrajectoryAnalysis:
     """Tier 2: LLM-based trajectory classification (primary approach).
 
-    Sends the full trajectory context to the LLM for analysis. The LLM
-    receives heuristic signals as supporting evidence but makes the
-    final classification decision.
+    Sends the full trajectory context to the LLM and validates the response
+    against :class:`TrajectoryClassificationResponse`. Falls back to the
+    heuristic classifier on any error (network, validation, etc.).
     """
     if heuristic_signals is None:
         heuristic_signals = extract_heuristic_signals(
             trajectory, gold_patch, f2p_test_names
         )
 
-    prompt = _build_trajectory_analysis_prompt(
+    user_prompt = _build_user_prompt(
         trajectory, gold_patch, problem_statement, f2p_test_names,
         heuristic_signals, contamination_context,
     )
 
     try:
-        response = await llm.query(
-            system_prompt=TRAJECTORY_ANALYSIS_SYSTEM_PROMPT,
-            user_prompt=prompt,
+        result: TrajectoryClassificationResponse = await llm.query_structured(
+            TRAJECTORY_ANALYSIS_SYSTEM_PROMPT,
+            user_prompt,
+            TrajectoryClassificationResponse,
         )
 
-        result = _parse_llm_response(response)
-        pattern = LeakagePattern(result.get("pattern", "UNKNOWN"))
-        evidence_strength = result.get("evidence_strength", "moderate")
-        reasoning = result.get("reasoning", "")
-        causal_chain = result.get("causal_chain", "")
-        key_evidence = result.get("key_evidence", [])
+        try:
+            pattern = LeakagePattern(result.pattern)
+        except ValueError:
+            pattern = LeakagePattern.UNKNOWN
 
-        # Extract trajectory label from LLM response
-        trajectory_label = None
-        tl_str = result.get("trajectory_label", "")
-        if tl_str:
-            try:
-                trajectory_label = AgentTrajectoryLabel(tl_str)
-            except ValueError:
-                pass
+        try:
+            trajectory_label = AgentTrajectoryLabel(result.trajectory_label)
+        except ValueError:
+            trajectory_label = None
 
-        evidence = []
-        if reasoning:
-            evidence.append(f"LLM analysis: {reasoning}")
-        if causal_chain:
-            evidence.append(f"Causal chain: {causal_chain}")
-        evidence.extend(key_evidence)
+        evidence: list[str] = []
+        if result.reasoning:
+            evidence.append(f"LLM analysis: {result.reasoning}")
+        if result.causal_chain:
+            evidence.append(f"Causal chain: {result.causal_chain}")
+        evidence.extend(result.key_evidence)
 
         return TrajectoryAnalysis(
             instance_id=trajectory.instance_id,
             agent_name=trajectory.agent_name,
             leakage_pattern=pattern,
-            evidence_strength=evidence_strength,
+            evidence_strength=result.evidence_strength,
             evidence=evidence,
             gold_patch_similarity=heuristic_signals["gold_patch_similarity"],
             pip_install_commands=heuristic_signals["pip_install_commands"],
             test_references=heuristic_signals["test_references"],
-            llm_reasoning=reasoning,
-            causal_chain=causal_chain,
-            agent_behavior_summary=result.get("agent_behavior_summary", ""),
+            llm_reasoning=result.reasoning,
+            causal_chain=result.causal_chain,
+            agent_behavior_summary=result.agent_behavior_summary,
             trajectory_label=trajectory_label,
+            resolved=trajectory.resolved,
         )
     except Exception as exc:
         logger.warning(
@@ -466,38 +367,6 @@ async def classify_with_llm(
         return classify_heuristic_only(
             trajectory, gold_patch, f2p_test_names,
         )
-
-
-def _parse_llm_response(response: str) -> dict[str, Any]:
-    """Parse LLM JSON response with fallback for markdown fences."""
-    text = response.strip()
-
-    # Try direct parse
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    # Try extracting from markdown fences
-    import re
-    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
-    if fence_match:
-        try:
-            return json.loads(fence_match.group(1))
-        except json.JSONDecodeError:
-            pass
-
-    # Try finding JSON object
-    brace_start = text.find("{")
-    brace_end = text.rfind("}")
-    if brace_start != -1 and brace_end != -1:
-        try:
-            return json.loads(text[brace_start:brace_end + 1])
-        except json.JSONDecodeError:
-            pass
-
-    logger.warning("Failed to parse LLM response as JSON")
-    return {"pattern": "UNKNOWN", "evidence_strength": "weak", "reasoning": text}
 
 
 

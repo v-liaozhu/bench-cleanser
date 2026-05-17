@@ -38,8 +38,8 @@ def _report(severity: Severity, labels: list[TaskContaminationLabel]) -> Contami
                                    has_modified_tests=False),
         description_clarity=DescriptionClarity(score=0.0, reasoning=""),
         task_labels=[
-            TaskLabelAssignment(label=l, evidence=["e"], reasoning="r")
-            for l in labels
+            TaskLabelAssignment(label=label, evidence=["e"], reasoning="r")
+            for label in labels
         ],
     )
 

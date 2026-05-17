@@ -7,7 +7,6 @@ import logging
 import os
 import pathlib
 import re
-from typing import Any
 
 from bench_cleanser.trajectory.models import ActionType, TrajectoryAction, TrajectoryRecord
 
@@ -199,11 +198,15 @@ ORDER BY ar.created_at ASC"""
     logger.info("Fetching %d agent run transcripts from Docent", total_to_fetch)
 
     try:
-        from rich.progress import (
-            BarColumn, MofNCompleteColumn, Progress, SpinnerColumn,
-            TextColumn, TimeElapsedColumn,
-        )
         from rich.console import Console
+        from rich.progress import (
+            BarColumn,
+            MofNCompleteColumn,
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            TimeElapsedColumn,
+        )
         use_rich = True
     except ImportError:
         use_rich = False

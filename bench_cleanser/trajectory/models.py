@@ -109,6 +109,11 @@ class TrajectoryAnalysis:
     causal_chain: str = ""                      # What led the agent to its approach
     agent_behavior_summary: str = ""            # Brief characterization of agent behavior
     trajectory_label: AgentTrajectoryLabel | None = None
+    # The agent's reported outcome on the F2P tests — propagated from
+    # the source TrajectoryRecord. Stage 7 fusion needs it to distinguish
+    # AMBIGUOUS_PASS (passed with UNKNOWN trajectory) from a failed-and-
+    # uncharacterised attempt. Defaults to False so legacy callers stay safe.
+    resolved: bool = False
 
     @property
     def agent_trajectory_label(self) -> AgentTrajectoryLabel:
@@ -139,4 +144,5 @@ class TrajectoryAnalysis:
             "llm_reasoning": self.llm_reasoning,
             "causal_chain": self.causal_chain,
             "agent_behavior_summary": self.agent_behavior_summary,
+            "resolved": self.resolved,
         }

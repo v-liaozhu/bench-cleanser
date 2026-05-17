@@ -11,7 +11,7 @@ import os
 import pathlib
 import subprocess
 import threading
-from typing import Sequence
+from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 

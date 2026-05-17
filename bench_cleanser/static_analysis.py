@@ -10,7 +10,7 @@ import ast
 import logging
 import pathlib
 import re
-from typing import Sequence
+from collections.abc import Sequence
 
 from bench_cleanser.models import Assertion, CallTarget, TestedFunction
 

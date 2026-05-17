@@ -1,0 +1,18 @@
+{
+  "total_tasks": 731,
+  "severity_distribution": {
+    "CLEAN": 165,
+    "MINOR": 387,
+    "MODERATE": 72,
+    "SEVERE": 107
+  },
+  "label_distribution": {
+    "weak_coverage": 455,
+    "wide_tests": 99,
+    "clean": 165,
+    "scope_creep": 180,
+    "approach_lock": 88,
+    "test_mutation": 45,
+    "unclear_spec": 16
+  }
+}

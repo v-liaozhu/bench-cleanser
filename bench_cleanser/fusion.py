@@ -178,20 +178,43 @@ def fuse(
         )
 
     # Rule 4 — passed but we cannot classify the trajectory.
-    if traj in _AGENT_UNKNOWN and trajectory.instance_id and trajectory.agent_name:
-        # Distinguish pass vs fail by trajectory record when available.
-        # Here we only have the analysis; treat UNKNOWN as ambiguous pass only
-        # if the caller merged a passed trajectory.  Trajectory outcome is
-        # encoded in the label family — UNKNOWN with no other signal is
-        # genuinely ambiguous.
+    # Driven by the trajectory's reported outcome (`resolved`), not by analysis
+    # identity. A passed-but-UNKNOWN trajectory on a clean task is genuinely
+    # AMBIGUOUS_PASS; on a contaminated task it is INCONCLUSIVE because the
+    # contamination labels would otherwise have produced CONTAMINATED_PASS
+    # had we been able to confirm the pass was clean-trajectory.
+    if traj in _AGENT_UNKNOWN:
         evidence.append("Trajectory classification inconclusive")
+        if trajectory.resolved:
+            evidence.append("Agent reported PASS on this task")
+            if sev == Severity.CLEAN:
+                return _make(
+                    report, trajectory,
+                    verdict=FusionVerdict.AMBIGUOUS_PASS,
+                    reasoning=(
+                        "Agent passed a clean task but the trajectory could "
+                        "not be characterised. Manual review recommended."
+                    ),
+                    invalidates=False, evidence=evidence,
+                )
+            return _make(
+                report, trajectory,
+                verdict=FusionVerdict.INCONCLUSIVE,
+                reasoning=(
+                    "Agent passed but the trajectory could not be characterised "
+                    f"and the task carries severity {sev.value}. Cannot decide "
+                    "between FAIR_PASS, AGENT_CHEATED, and CONTAMINATED_PASS."
+                ),
+                invalidates=False, evidence=evidence,
+            )
+        # Did not resolve and trajectory is unknown — no usable signal.
+        evidence.append("Agent reported FAIL on this task")
         return _make(
             report, trajectory,
-            verdict=FusionVerdict.AMBIGUOUS_PASS if sev == Severity.CLEAN
-            else FusionVerdict.INCONCLUSIVE,
+            verdict=FusionVerdict.INCONCLUSIVE,
             reasoning=(
-                "Agent outcome could not be characterised from the "
-                "trajectory.  Manual review recommended."
+                "Agent failed and the trajectory could not be characterised. "
+                "Manual review recommended."
             ),
             invalidates=False, evidence=evidence,
         )

@@ -44,11 +44,16 @@ async def analyze_trajectories(
     pattern_counts: dict[str, int] = defaultdict(int)
 
     try:
-        from rich.progress import (
-            BarColumn, MofNCompleteColumn, Progress, SpinnerColumn,
-            TaskProgressColumn, TextColumn, TimeElapsedColumn,
-        )
         from rich.console import Console
+        from rich.progress import (
+            BarColumn,
+            MofNCompleteColumn,
+            Progress,
+            SpinnerColumn,
+            TaskProgressColumn,
+            TextColumn,
+            TimeElapsedColumn,
+        )
         use_rich = True
     except ImportError:
         use_rich = False
@@ -468,8 +473,9 @@ async def run_trajectory_analysis(
             )
 
     # Stage 7 — Task-Trajectory Fusion summary.
-    from bench_cleanser.fusion import FusionVerdict, fuse
     from collections import Counter
+
+    from bench_cleanser.fusion import FusionVerdict, fuse
     fusion_counter: Counter[str] = Counter()
     per_agent_counter: dict[str, Counter[str]] = defaultdict(Counter)
     invalidated = 0

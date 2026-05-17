@@ -8,6 +8,10 @@ problem description, using a dual taxonomy:
 Taxonomy aligned with OpenAI's SWE-bench Verified audit terminology:
   - APPROACH_LOCK = "Narrow test cases"
   - OVER_TEST     = "Wide test cases"
+
+See README.md for the full architecture and docs/TAXONOMY.md for the label
+definitions and evidence requirements.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.0.0"
+

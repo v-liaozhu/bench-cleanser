@@ -1,3 +1,8 @@
+# Minimal runtime requirements for `pip install -r requirements.txt`.
+# For a full development install with extras (trajectory loading, structural
+# diff backend, dev tooling) use `pip install -e .[dev,trajectory,structural]`
+# against pyproject.toml instead.
+
 datasets>=2.14.0
 openai>=1.0.0
 pydantic>=2.0.0
@@ -7,6 +12,5 @@ azure-identity>=1.15.0
 azure-identity-broker>=1.1.0
 msal>=1.26.0
 requests>=2.31.0
-docent-python>=0.1.0
 pandas>=2.0.0
 rich>=13.0.0

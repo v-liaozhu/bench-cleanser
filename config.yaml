@@ -5,18 +5,16 @@ llm:
   max_tokens: 65536
   reasoning_effort: "high"
   max_concurrent_requests: 10
+  # `retry_attempts` only bounds retries for API errors (rate limits, 5xx,
+  # validator). `APIConnectionError` is retried indefinitely so long-running
+  # batches survive transient network drops.
   retry_attempts: 7
   retry_delay_seconds: 5.0
 
 pipeline:
   concurrency: 3
   cache_dir: ".cache/llm_responses"
-  output_dir: "output_pro_v6"
-
-thresholds:
-  clean_max: 0.2
-  minor_max: 0.5
-  moderate_max: 0.8
+  output_dir: "output"
 
 code_visitation:
   enabled: true

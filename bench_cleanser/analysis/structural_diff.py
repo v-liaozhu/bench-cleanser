@@ -16,7 +16,6 @@ import pathlib
 import re
 import subprocess
 import tempfile
-from typing import Sequence
 
 from bench_cleanser.models import (
     AssertionDetail,
@@ -148,7 +147,7 @@ def _compute_with_astred(
 
 
 def _extract_changed_blocks_astred(
-    pre_graph: "CodeGraph",
+    pre_graph: CodeGraph,
     patch_files: list[str],
 ) -> list[ChangedBlock]:
     """Extract changed blocks from astred_core CodeGraph edit_status flags."""

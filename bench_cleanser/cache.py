@@ -7,7 +7,7 @@ import json
 import os
 import pathlib
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 class ResponseCache:
@@ -89,7 +89,7 @@ class ResponseCache:
                 "key": key,
                 "model": model,
                 "response": response,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             },
             ensure_ascii=False,
             indent=2,

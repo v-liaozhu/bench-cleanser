@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
-from bench_cleanser.models import ContaminationReport, Severity, TaskContaminationLabel
+from bench_cleanser.models import ContaminationReport, Severity
 
 logger = logging.getLogger(__name__)
 
@@ -239,7 +239,6 @@ def _case_highlight_slide(report: ContaminationReport, index: int) -> str:
         signals.append(f"OVER_PATCH: {ep.unrelated_count} UNRELATED / {ep.total_hunks} hunks")
     if et.off_topic_assertions > 0 or et.unrelated_count > 0:
         signals.append(f"OVER_TEST: {et.off_topic_assertions} OFF_TOPIC / {et.total_assertions} assertions")
-    signal_str = " | ".join(signals) if signals else "—"
 
     core_req = report.intent.core_requirement[:200]
 

@@ -15,7 +15,6 @@ from datetime import datetime
 
 from bench_cleanser.models import (
     ContaminationReport,
-    Severity,
     TaskRecord,
 )
 

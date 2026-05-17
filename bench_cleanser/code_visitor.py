@@ -10,7 +10,6 @@ from __future__ import annotations
 import ast
 import logging
 import pathlib
-import textwrap
 
 logger = logging.getLogger(__name__)
 

@@ -1,677 +1,716 @@
-<p align="center">
-  <strong>bench-cleanser</strong><br>
-  <em>Automated Contamination Detection for SWE-bench Evaluation Benchmarks</em>
-</p>
+# bench-cleanser
 
-<p align="center">
-  <a href="#key-findings">Findings</a> &bull;
-  <a href="#architecture">Architecture</a> &bull;
-  <a href="#taxonomy">Taxonomy</a> &bull;
-  <a href="#ecosystem">Ecosystem</a> &bull;
-  <a href="#case-studies">Case Studies</a> &bull;
-  <a href="#usage">Usage</a>
-</p>
+> *Automated contamination, fairness, and trajectory-leakage analysis for SWE-bench
+> family benchmarks (Verified, Pro, Live).*
 
----
+`bench-cleanser` is a multi-stage pipeline that takes raw SWE-bench task records
+(problem statement + gold patch + test patch) and an optional set of agent
+trajectories, and produces:
 
-## What is bench-cleanser?
+1. A **task-level contamination report** (Axis 1) — what is wrong with the
+   benchmark item itself.
+2. A **per-agent trajectory verdict** (Axis 2) — how each agent arrived at its
+   answer and whether the trajectory shows a leakage signal.
+3. A **fused fairness verdict** per `(task, agent)` pair (Stage 7) — combining
+   the two axes into a single deterministic call: did this measurement actually
+   measure capability?
 
-bench-cleanser is a multi-stage analysis pipeline that audits SWE-bench tasks for evaluation fairness. It identifies cases where gold patches or fail-to-pass (F2P) tests exceed the problem description -- producing evaluation criteria that penalize agents for correctly solving the *described* problem rather than for genuine engineering failures.
-
-The tool operates across two taxonomic axes:
-- **Axis 1 -- Task Contamination** (8 binary labels): classifies *how* a task's evaluation criteria diverge from its problem statement
-- **Axis 2 -- Agent Trajectory** (8 labels): classifies *how* an agent behaved on a task (genuine solve, memorization, leakage)
-
-Together, these axes separate **benchmark design problems** from **agent capability gaps** and **training data leakage** -- the three confounded signals in raw SWE-bench scores.
+Every classification is grounded in artefacts from the task: parsed diff hunks,
+AST-level structural diff, call-graph edges between F2P tests and changed
+blocks, per-assertion `ON_TOPIC` / `OFF_TOPIC` verdicts, and per-trajectory
+patch-similarity / pip-install / test-reference signals. There are no
+free-floating numerical thresholds in the contamination logic — labels are
+assigned on evidence, severity is computed from label-set membership.
 
 ---
 
-## Why This Matters
+## Table of contents
 
-> *"We found that 59.4% of the audited problems have flawed test cases that reject functionally correct submissions"*
-> -- OpenAI, ["Why we no longer evaluate SWE-bench Verified"](https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/) (2026)
+- [Trust model](#trust-model)
+- [Pipeline overview](#pipeline-overview)
+- [Stages 1 – 7 in detail](#stages-1--7-in-detail)
+- [Taxonomies](#taxonomies)
+- [Repository layout](#repository-layout)
+- [Quick start](#quick-start)
+- [Configuration](#configuration)
+- [Outputs](#outputs)
+- [How to interpret a report](#how-to-interpret-a-report)
+- [Testing](#testing)
+- [Design principles](#design-principles)
+- [Provenance — what changed and why](#provenance--what-changed-and-why)
 
-OpenAI identified two categories of test flaws:
-- **Narrow test cases** (35.5%): enforce specific implementation details, rejecting correct alternatives
-- **Wide test cases** (18.8%): check additional functionality not specified in the problem description
+Reference docs ship under [`docs/`](docs/):
 
-bench-cleanser provides the automated framework to detect these flaws at scale. Our taxonomy maps directly to OpenAI's categories:
-
-| OpenAI Category | bench-cleanser Labels | Detection Method |
-|---|---|---|
-| **Narrow test cases** | `APPROACH_LOCK` | Cross-reference analysis: F2P tests exercise UNRELATED patch hunks |
-| **Wide test cases** | `WIDE_TESTS` | Per-assertion verdict: OFF_TOPIC assertions beyond acceptance criteria |
-| **Modified test flaws** | `TEST_MUTATION` | Pre/post-patch diff: modified tests with misaligned changes |
-| **Gold patch scope expansion** | `SCOPE_CREEP` | Per-hunk classification: UNRELATED behavioral hunks |
-| **Training contamination** | `agent_passed_leak`, `agent_passed_trained_hack` | Trajectory analysis: gold patch similarity, memorized patterns |
-
-Where OpenAI's audit was a one-time manual review of 138 tasks, bench-cleanser runs this analysis **automatically on every task** with full traceability from individual assertions to contamination labels.
-
----
-
-## Key Findings
-
-### SWE-bench Pro (731 tasks) -- Pipeline v6
-
-v6 incorporates SWE-bench Pro's `requirements` and `interface` fields (evaluation-only context withheld from agents), batch dataset loading for trajectory analysis, and real LLM-primary trajectory classification.
-
-| Severity | Count | Percentage | Description |
-|----------|------:|:----------:|-------------|
-| **SEVERE** | 107 | 14.6% | Approach-locked tests or combined wide tests + scope creep |
-| **MODERATE** | 72 | 9.8% | Test mutation edits or standalone wide tests |
-| **MINOR** | 387 | 52.9% | Scope creep alone or specification ambiguity |
-| **CLEAN** | 165 | 22.6% | No contamination signals detected |
-
-### SWE-bench Verified (500 tasks) -- Pipeline v3
-
-| Severity | Count | Percentage |
-|----------|------:|:----------:|
-| **SEVERE** | 105 | 21.0% |
-| **MODERATE** | 85 | 17.0% |
-| **MINOR** | 78 | 15.6% |
-| **CLEAN** | 232 | 46.4% |
-
-### Contamination Penalty: Does It Actually Hurt Agents?
-
-Cross-referencing a top agent's resolution status across 730 SWE-bench Pro instances with v5 contamination severity:
-
-```
-Severity     Tasks   Resolved   Failed   Resolve Rate   vs CLEAN
-──────────   ─────   ────────   ──────   ────────────   ────────
-CLEAN          130         56       74        43.1%        ---
-MINOR          448        211      237        47.1%      +4.0pp
-MODERATE        54         17       37        31.5%     -11.6pp
-SEVERE          98         35       63        35.7%      -7.4pp
-─────────────────────────────────────────────────────────────────
-OVERALL        730        319      411        43.7%
-```
-
-The penalty concentrates in **test-related contamination**:
-
-```
-Label            Instances   Resolve Rate   vs clean baseline
-───────────────  ─────────   ────────────   ─────────────────
-clean                  130        43.1%     (baseline)
-weak_coverage              526        44.5%     +1.4pp
-scope_creep           174        47.1%     +4.0pp
-approach_lock           84        35.7%     -7.4pp
-test_mutation             31        29.0%     -14.0pp
-wide_tests            98        28.6%     -14.5pp  (p<0.05)
-unclear_spec            22        27.3%     -15.8pp
-```
-
-**Key insight**: `scope_creep` alone causes **no penalty** (agents can pass with a narrower correct fix). The penalty comes from **test-level contamination** (`wide_tests`, `test_mutation`) -- agents cannot pass F2P tests that enforce behavior never specified in the problem. This aligns with OpenAI's finding that test design flaws, not patch complexity, are the primary source of unfair failures.
-
-Among SEVERE tasks, those **with** `wide_tests` resolve at 25.0% vs 44.4% **without** -- the combination `approach_lock + wide_tests` drops to 12.5-20%.
+- [`docs/TAXONOMY.md`](docs/TAXONOMY.md) — every label, evidence rule, severity contribution, OpenAI-audit mapping.
+- [`docs/FUSION.md`](docs/FUSION.md) — the eight Stage-7 verdicts with worked examples.
+- [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — dev install, prompt-editing workflow, label-addition checklist.
 
 ---
 
-## Architecture
+## Trust model
 
-bench-cleanser processes each SWE-bench task through six analysis stages. The pipeline enforces a strict **information barrier**: the intent extraction stage never sees the gold patch or test patch, preventing the LLM from reverse-engineering the solution.
+`bench-cleanser` is intended to support **SOTA SWE training and
+evaluation work** — that means every output has to survive scrutiny
+from someone reading the OpenAI [*Why we no longer evaluate
+SWE-bench Verified*](https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/)
+critique. The guarantees in v1.0.0 are deliberately narrow:
 
-```
-                    ┌─────────────────────────────┐
-                    │     SWE-bench Dataset        │
-                    │  (problem_statement, patch,  │
-                    │   test_patch, fail_to_pass,  │
-                    │   requirements, interface)   │
-                    └─────────────┬───────────────┘
-                                  │
-                    ┌─────────────▼───────────────┐
-              1     │          PARSE               │  Deterministic
-                    │  Extract structured hunks    │  diff parsing
-                    │  from gold patch + test      │
-                    └─────────────┬───────────────┘
-                                  │
-                    ┌─────────────▼───────────────┐
-             1.5    │     CODE VISITATION          │  Git clone +
-                    │  Clone repo at base_commit   │  AST extraction
-                    │  Extract full function/test  │  (multi-language)
-                    │  source via Python AST       │
-                    └─────────────┬───────────────┘
-                                  │
-              ┌───────────────────┼───────────────────┐
-              │                                       │
-┌─────────────▼───────────────┐         ┌─────────────▼───────────────┐
-│          INTENT              │         │     STRUCTURAL DIFF         │
-│  Extract acceptance criteria │   2     │  AST-level changed block    │  3
-│  + problem decomposition     │         │  + test block extraction    │
-│  from problem statement ONLY │  LLM    │                             │
-│  ██ BLIND to gold patch ██   │         │  Call graph, import map,    │
-└─────────────┬───────────────┘         │  tested function resolution │
-              │                         └─────────────┬───────────────┘
-              │                                       │
-              └───────────────────┬───────────────────┘
-                                  │
-              ┌───────────────────┼───────────────────┐
-              │                                       │
-┌─────────────▼───────────────┐         ┌─────────────▼───────────────┐
-│      PATCH MATCHING          │         │       TEST MATCHING         │
-│  Classify each gold patch    │  4A     │  Classify each F2P test     │  4B
-│  hunk against intent:        │         │  against intent:            │
-│  REQUIRED / ANCILLARY /      │  LLM    │  ALIGNED / TANGENTIAL /     │  LLM
-│  UNRELATED                   │         │  UNRELATED                  │
-│                              │         │  Per-assertion: ON_TOPIC /  │
-│  Uses structural diff +      │         │  OFF_TOPIC                  │
-│  call graph context          │         │  Modified test detection    │
-└─────────────┬───────────────┘         └─────────────┬───────────────┘
-              │                                       │
-              └───────────────────┬───────────────────┘
-                                  │
-                    ┌─────────────▼───────────────┐
-                    │   CROSS-REFERENCE ANALYSIS   │  Deterministic
-                    │  Detect circular deps        │
-                    │  between UNRELATED hunks     │
-                    │  and F2P tests via call graph │
-                    └─────────────┬───────────────┘
-                                  │
-                    ┌─────────────▼───────────────┐
-              5     │     CLASSIFICATION           │  Heuristic rules
-                    │  8-label dual taxonomy       │  + LLM refinement
-                    │  Bucket-based severity        │
-                    │  Heuristic → LLM pipeline    │
-                    └─────────────┬───────────────┘
-                                  │
-                    ┌─────────────▼───────────────┐
-                    │         OUTPUT               │
-                    │  JSON reports, summary CSV,  │
-                    │  deep dives, MARP slides     │
-                    └─────────────────────────────┘
-```
+**What this tool guarantees**
 
-### Stage Details
+- Every assigned label carries explicit evidence (hunk indices,
+  assertion indices, problem-text quotes) persisted in the report
+  JSON. A label without evidence cannot be emitted — the classifier
+  rejects it.
+- Severity is **pure set membership** over the Axis-1 label set. No
+  floating-point thresholds, no per-label weights, no counts. The
+  severity bucket is reproducible from the persisted report alone.
+- Stage 7 fusion is **deterministic** — no LLM call. The fairness
+  verdict for `(task, agent)` is a pure rule engine over the two
+  axis labels and the trajectory's `resolved` outcome.
+- LLM-backed classification (intent, patch, test, task, trajectory)
+  goes through Pydantic structured output (`response_format: json_object`
+  + schema in system prompt). No ad-hoc JSON parsing; no silent field
+  omissions.
+- Prompts ship as plain markdown in [`bench_cleanser/prompts/`](bench_cleanser/prompts/)
+  and are diffable in PRs.
 
-**Stage 1 -- Parse.** Deterministic unified diff parsing. Extracts structured patch hunks and test hunks. Matches F2P test IDs to their corresponding diff hunks. Detects whether each test is `NEW` (added by the PR) or `MODIFIED` (pre-existing test with changes). Supports Python, Go, JavaScript/TypeScript, Java, Rust, and Ruby.
+**What this tool does NOT guarantee**
 
-**Stage 1.5 -- Code Visitation.** Clones the target repository at `base_commit`. Uses Python AST analysis to extract full function/test source code. For each F2P test hunk: resolves imports, identifies tested functions (including whether each is modified by the gold patch), builds call target maps, and extracts structured assertion data.
+- That its LLM-assigned labels match a human labeller. The taxonomy
+  is precise but the LLM remains the limiting factor; see
+  [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) for how to refine a
+  prompt without changing the deterministic logic underneath.
+- That a `CLEAN` verdict means the row is suitable for every
+  conceivable use — only that the bench-cleanser axes turned up
+  nothing. Reward hacking, agent-runtime flakes, and harness bugs
+  are out of scope.
+- That `invalidates_measurement` should be the only filter your
+  evaluation applies. It marks the rows the tool *knows* cannot be
+  used; consumers may legitimately apply stricter filters (e.g.,
+  drop `AMBIGUOUS_PASS` as well when computing a headline score).
 
-**Stage 2 -- Intent Extraction.** An LLM reads *only* the problem statement, requirements, and interface (never the gold patch or test patch) and extracts: core requirement, behavioral contract, acceptance criteria, out-of-scope items, ambiguity score, and a problem decomposition. For SWE-bench Pro, the `requirements` and `interface` fields provide the full evaluation-only specification that agents never see.
+**When to override a verdict**
 
-**Stage 3 -- Structural Diff.** Deterministic AST-level analysis of the gold patch. Identifies changed blocks and test blocks. Resolves import paths and builds a call graph mapping tests to the functions they exercise.
-
-**Stage 4A -- Patch Matching.** Each gold patch hunk classified against extracted intent as `REQUIRED` (directly addresses problem), `ANCILLARY` (supportive, no new behavior), or `UNRELATED` (behavioral change beyond scope).
-
-**Stage 4B -- Test Matching.** Each F2P test classified as `ALIGNED`, `TANGENTIAL`, or `UNRELATED`. Each individual assertion further classified as `ON_TOPIC` or `OFF_TOPIC`. For modified tests, the LLM assesses whether modifications align with the problem statement.
-
-**Cross-Reference Analysis.** Deterministic detection of circular dependencies: cases where an F2P test exercises functions from an UNRELATED patch hunk. This means the test cannot pass without implementing out-of-scope changes -- a strong `APPROACH_LOCK` signal.
-
-**Stage 5 -- Classification.** Heuristic pre-classifier fires candidate labels from binary signals. These candidates, with full per-hunk and per-test evidence, are passed to an LLM for refinement. The LLM can confirm, adjust confidence, or override candidates.
+The tool will rarely produce a wrong verdict given correct labels,
+because Stage 7 is deterministic. Overrides should target the
+**labels**, not the verdict — re-classify the task with corrected
+evidence, then let fusion re-derive the verdict. A `task_labels.json`
+override file is on the roadmap for v1.1; today the workflow is to
+edit the report JSON and re-run `bench-cleanser-trajectory` against
+the corrected report directory.
 
 ---
 
-## Taxonomy
+## Pipeline overview
 
-### Axis 1: Task Contamination Labels
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│   raw TaskRecord                                                        │
+│   (problem_statement, patch, test_patch, F2P, P2P, repo, base_commit)   │
+└────────────────────────────┬────────────────────────────────────────────┘
+                             │
+                             ▼
+   ┌─────────── Stage 1  PARSE ─────────────────────────────────────┐
+   │  parsing/patch_parser.py   parsing/test_parser.py              │
+   │  → ParsedTask (PatchHunk[], TestHunk[], F2P-to-hunk mapping)   │
+   └───────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+   ┌──────── Stage 1.5  CODE VISITATION ────────────────────────────┐
+   │  repo_manager.py           code_visitor.py                     │
+   │  static_analysis.py                                            │
+   │  → CodeContext per F2P test (full source, fixtures, imports,   │
+   │    tested functions, call targets, assertions, pre-patch src)  │
+   └───────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+   ┌──────── Stage 2  INTENT EXTRACTION (LLM, blind to patch) ──────┐
+   │  analysis/scope_analyzer.py                                    │
+   │  → IntentStatement (acceptance_criteria, behavioral_contract,  │
+   │    out_of_scope, ambiguity_score, mentioned entities)          │
+   └───────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+   ┌──────── Stage 3  STRUCTURAL DIFF (astred_core / ast) ──────────┐
+   │  analysis/structural_diff.py                                   │
+   │  → StructuralDiff (changed_blocks[], test_blocks[],            │
+   │    call_edges between tests and changed source)                │
+   └───────────────────────────────────────────────────────────────┘
+                             │
+                ┌────────────┴────────────┐
+                ▼                         ▼
+   ┌── Stage 4A  PATCH MATCH ─┐   ┌── Stage 4B  TEST MATCH ───────────┐
+   │  analysis/patch_analyzer │   │  analysis/test_analyzer.py        │
+   │  → PatchAnalysis         │   │  → TestAnalysis                   │
+   │    (REQUIRED / ANCILLARY │   │    (ALIGNED / TANGENTIAL /         │
+   │     / UNRELATED hunks)   │   │     UNRELATED tests, per-          │
+   │                          │   │     assertion ON_TOPIC /           │
+   │                          │   │     OFF_TOPIC, modification        │
+   │                          │   │     alignment)                     │
+   └──────────────────────────┘   └────────────────────────────────────┘
+                ▼                         ▼
+   ┌── Stage 4C  CROSS-REFERENCE ───────────────────────────────────┐
+   │  analysis/cross_ref.py                                         │
+   │  → CrossReferenceResult (overpatch–overtest couplings)          │
+   └───────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+   ┌──────── Stage 5  DUAL TAXONOMY CLASSIFIER (LLM) ───────────────┐
+   │  classification/dual_taxonomy.py                               │
+   │  → list[TaskLabelAssignment] (multi-label)                     │
+   └───────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+   ┌──────── Stage 6  REPORT BUILD + SEVERITY ──────────────────────┐
+   │  classification/scorer.py                                      │
+   │  classification/dual_taxonomy.py::compute_task_severity        │
+   │  → ContaminationReport (CLEAN / MINOR / MODERATE / SEVERE +    │
+   │    label set + recommendations) — written to output/reports/   │
+   └───────────────────────────────────────────────────────────────┘
 
-Eight binary labels. A task can have zero or more. If any contamination label is present, `CLEAN` is excluded.
+   ─── trajectory side (independent) ───────────────────────────────
+   ┌──────── trajectory loading + classification ───────────────────┐
+   │  trajectory/loader.py           trajectory/analyzer.py         │
+   │  trajectory/classifier.py                                      │
+   │  → TrajectoryAnalysis per (instance, agent), with a single     │
+   │    AgentTrajectoryLabel from Axis 2                            │
+   └───────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+   ┌──────── Stage 7  TASK-TRAJECTORY FUSION (rule-based) ──────────┐
+   │  fusion.py                                                     │
+   │  → TaskTrajectoryFusion per (task, agent)                      │
+   │    8 verdicts, invalidates_measurement flag                    │
+   └───────────────────────────────────────────────────────────────┘
+```
 
-| Label | Definition | OpenAI Equivalent |
-|-------|-----------|-------------------|
-| `APPROACH_LOCK` | F2P tests require a specific implementation approach the problem doesn't determine. A correct-but-different solution would fail. | Narrow test cases |
-| `WIDE_TESTS` | F2P tests verify behavior not described in the problem statement. | Wide test cases |
-| `TEST_MUTATION` | A pre-existing test was modified to assert on new behavior. The test existed before the PR, making it look legitimate, but assertions were silently changed. | (not separately categorized) |
-| `SCOPE_CREEP` | Gold patch contains behavioral code changes beyond problem scope. New features, unrelated refactoring, scope expansion. | (not separately categorized) |
-| `UNCLEAR_SPEC` | Problem statement is too ambiguous or actively misleading to determine the correct solution. | Miscellaneous issues |
-| `HIDDEN_CONTEXT` | Essential solution information exists only in hints text, not in the problem statement. | (not applicable to Pro) |
-| `WEAK_COVERAGE` | F2P tests don't fully cover stated acceptance criteria. A partial fix can pass. | (benchmark quality, not fairness) |
-| `CLEAN` | No contamination detected. Mutually exclusive with all others. | -- |
-
-### Severity Rules
-
-Severity is determined by **which labels are present** -- no arithmetic, no weights, no thresholds.
-
-| Severity | Trigger |
-|----------|---------|
-| **SEVERE** | `APPROACH_LOCK` present, **OR** both `WIDE_TESTS` and `SCOPE_CREEP` present |
-| **MODERATE** | `TEST_MUTATION` present, **OR** `WIDE_TESTS` alone |
-| **MINOR** | Any other single label |
-| **CLEAN** | No contamination labels |
-
-### Axis 2: Agent Trajectory Labels
-
-Per-agent classification of how the agent behaved on a task.
-
-**Passed labels** (agent resolved):
-
-| Label | Description |
-|-------|-------------|
-| `agent_passed_genuine` | Legitimate problem-solving with progressive exploration |
-| `agent_passed_leak` | Patch matches gold too closely; jumped directly to answer |
-| `agent_passed_package_leak` | Installed newer package via pip and copied fix |
-| `agent_passed_test_aware` | Referenced F2P test names/values before discovering them |
-| `agent_passed_trained_hack` | Applied memorized template without genuine reasoning |
-
-**Failed labels** (agent did not resolve):
-
-| Label | Description |
-|-------|-------------|
-| `agent_failed_completed_intent` | Patch correctly addresses the described problem but fails F2P tests due to task contamination |
-| `agent_failed_no_intent` | Did not solve the problem; genuine skill gap |
+Stages 1–6 run inside `bench_cleanser/pipeline.py::process_single_task`.
+Trajectory loading + Stage 7 run inside
+`bench_cleanser/trajectory/analyzer.py::run_trajectory_analysis`, invoked from
+`run_trajectory_analysis.py`.
 
 ---
 
-## Ecosystem
+## Stages 1 – 7 in detail
 
-### Where bench-cleanser fits
+### Stage 1 – PARSE
 
-Three distinct contamination vectors affect SWE-bench scores. Each requires a different detection approach:
+Pure-Python diff parsing. No LLM, no IO.
 
+* `parsing/patch_parser.py` – splits the gold patch into `PatchHunk` objects
+  carrying `file_path`, hunk index, added/removed line lists, and the original
+  diff text.
+* `parsing/test_parser.py` – does the same for the test patch and emits
+  `TestHunk` objects with `modification_type ∈ {NEW, MODIFIED, UNKNOWN}`.
+* `match_f2p_tests_to_hunks` maps each F2P test ID to the test hunk that
+  defines or modifies it. F2P entries with no matching hunk (gold-state tests
+  that the patch does not touch) are tracked separately.
+
+Output: a `ParsedTask` containing the original `TaskRecord`, both hunk lists,
+and the F2P mapping. This is the only intermediate that Stage 1.5 mutates.
+
+### Stage 1.5 – CODE VISITATION
+
+Optional but recommended. Driven by `repo_manager.py` and `code_visitor.py`.
+
+* `RepoManager` does shallow `git clone`s into `.cache/repos/<repo>@<commit>/`,
+  with a per-clone timeout and disk reuse.
+* For every F2P test hunk, `enrich_with_code_context`:
+  * recovers the full pre-patch test source via `get_full_test_source`
+  * derives the post-patch test source by replaying added/removed lines
+  * extracts file imports and pytest fixtures
+  * builds a Python-level import map (`resolve_imports`) and identifies the
+    functions actually exercised by the test (`identify_tested_functions`)
+  * records concrete call targets and the AST-level assertions
+* The result is stored on the test hunk as `CodeContext`, including the
+  resolved `repo_path` so downstream stages can re-read source if needed.
+
+Failure mode: if the clone times out or the file cannot be located, Stage 1.5
+logs a warning, attaches no `CodeContext`, and the pipeline continues — Stage 4B
+will then operate on test source only.
+
+### Stage 2 – INTENT EXTRACTION (LLM; blind to gold patch)
+
+`analysis/scope_analyzer.py::extract_intent`.
+
+The LLM sees: the problem statement, hints, requirements (Pro), interface spec
+(Pro), and optionally pre-patch source for files the problem mentions. It does
+**not** see the gold patch or test patch. Output schema (`schemas.py`):
+
+```python
+class IntentStatement:
+    core_requirement: str
+    behavioral_contract: str        # BEFORE → AFTER
+    acceptance_criteria: list[str]  # explicit testable behaviours
+    out_of_scope: str
+    ambiguity_score: float          # qualitative, advisory only
+    decomposition: ProblemDecomposition  # bug / suggested_fix / mentioned entities
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    SWE-bench Score = f(A, B, C)                     │
-├─────────────────────┬──────────────────────┬────────────────────────┤
-│  A. Agent Skill     │ B. Benchmark Design  │ C. Training Leakage   │
-│                     │                      │                       │
-│  Genuine capability │ Tests/patch exceed   │ Model memorized gold  │
-│  to solve software  │ problem description  │ patch or PR details   │
-│  engineering tasks  │                      │                       │
-│                     │  ┌────────────────┐  │                       │
-│                     │  │ bench-cleanser │  │                       │
-│                     │  │  Axis 1        │  │                       │
-│                     │  └────────────────┘  │                       │
-│                     │                      │  ┌──────────────────┐ │
-│                     │                      │  │ bench-cleanser   │ │
-│                     │                      │  │  Axis 2          │ │
-│                     │                      │  └──────────────────┘ │
-├─────────────────────┴──────────────────────┴────────────────────────┤
-│  Related Work                                                       │
-│  • OpenAI SWE-bench Verified audit (manual, 138 tasks)             │
-│  • The SWE-Bench Illusion (arxiv: model memorization analysis)     │
-│  • OpenAI agent misalignment monitoring (runtime behavior)         │
-└─────────────────────────────────────────────────────────────────────┘
+
+`ambiguity_score` is **never** used as a gate by the contamination logic. It is
+written into the report for human review and shown to the Stage 5 classifier
+LLM as advisory context only. The classifier is explicitly instructed to make
+its `UNCLEAR_DESCRIPTION` decision from the problem text directly, not from the
+score.
+
+### Stage 3 – STRUCTURAL DIFF
+
+`analysis/structural_diff.py::compute_structural_diff`.
+
+Uses `astred_core` (.NET-backed multilingual AST) when available — installed
+into the venv by `pip install astred_core` plus a working .NET runtime. The
+correct call sequence is:
+
+```python
+pre_graph = CodeGraph()
+for path in changed_files:
+    ast_file = AstFile.load_file(path)        # parse one file
+    CodeGraphEdits.build(pre_graph, ast_file) # accumulate edit_status flags
 ```
 
-| Approach | Scope | Method | Ours |
-|----------|-------|--------|------|
-| OpenAI SWE-bench Verified audit | 138 tasks, manual | 6 expert reviewers per task | Automated, all tasks, per-assertion traceability |
-| The SWE-Bench Illusion (arxiv) | Model memorization | Training data overlap analysis | Our Axis 2 trajectory analysis covers this |
-| OpenAI agent monitoring | Runtime behavior | GPT-5.4 monitor on agent trajectories | Complementary: we audit the benchmark, they audit the agent |
-| **bench-cleanser** | **All tasks, automated** | **6-stage pipeline, dual taxonomy** | **Task design + agent behavior, full traceability** |
+Output (`StructuralDiff`):
+* `changed_blocks[]` – function/class blocks touched by the patch, with
+  `pre_source`, `post_source`, and `edit_status`
+* `test_blocks[]` – the F2P test functions
+* `call_edges[]` – `(test_name, callee_function_name)` pairs from the test
+  body to functions in the changed blocks
+* `astred_available: bool`
 
-### Key differentiators
+If astred fails or is missing, the module falls back to Python's stdlib `ast`
+to extract function/class blocks and a coarse call list. The LLM still gets
+*something*, just less precise.
 
-1. **Automated and scalable.** OpenAI's manual audit required 6 expert reviewers per task across 138 tasks. bench-cleanser processes 731 tasks automatically with per-assertion granularity.
-2. **Full traceability.** Every contamination label traces back to specific assertions, patch hunks, and cross-reference dependencies. This enables targeted remediation.
-3. **Dual-axis separation.** By independently classifying task contamination (Axis 1) and agent behavior (Axis 2), we disentangle benchmark design problems from training data leakage -- the two confounded signals OpenAI identified.
-4. **SWE-bench Pro support.** We parse the `requirements` and `interface` fields (evaluation-only context withheld from agents) to distinguish scope expansion from intended behavior.
-5. **Quantified impact.** We've computed the contamination penalty per label, showing that `wide_tests` causes a statistically significant -14.5pp resolve rate penalty (p<0.05).
+### Stage 4A – PATCH INTENT MATCH
+
+`analysis/patch_analyzer.py::analyze_patch`.
+
+Single batched LLM call. Input is the full `IntentStatement`, the hunk diff
+text for every hunk, and per-hunk structural context (the pre-patch source of
+the function the hunk modifies, when astred provided it). Output is one of
+three verdicts per hunk plus a per-hunk reasoning string:
+
+* `REQUIRED` — directly implements an acceptance criterion
+* `ANCILLARY` — supports a REQUIRED change (imports, exports, type hints,
+  docstrings, whitespace) but is not itself demanded by the problem
+* `UNRELATED` — behavioural change beyond the problem scope
+
+`PatchAnalysis` aggregates counts plus per-hunk verdicts.
+
+### Stage 4B – TEST INTENT MATCH
+
+`analysis/test_analyzer.py::analyze_tests`.
+
+Single batched LLM call across all F2P tests. Per test:
+
+* full post-patch source and (when modified) pre-patch source
+* fixtures, imports, tested-function source, call-target list with
+  `IN GOLD PATCH` markers
+* matched `Structural context` block listing call edges into changed blocks
+
+Output per test: a test-level verdict (`ALIGNED` / `TANGENTIAL` / `UNRELATED`),
+a per-assertion verdict (`ON_TOPIC` / `OFF_TOPIC`), and an
+`is_modification_aligned` flag for modified tests. `TestAnalysis` aggregates
+totals plus per-test verdicts.
+
+The Stage 4B system prompt explicitly frames per-assertion verdicts as the
+primary signal and instructs the model to be liberal with `OFF_TOPIC` —
+because every `OFF_TOPIC` assertion drives Stage 5's `OVER_TEST` decision.
+
+### Stage 4C – CROSS-REFERENCE
+
+`analysis/cross_ref.py::analyze_cross_references`.
+
+Pure heuristic, no LLM. Looks at every F2P test and, when it has structural
+or call-target information, checks whether it reaches functions inside hunks
+that Stage 4A labelled `UNRELATED`. Each match becomes an
+`OverpatchOvertestLink` with the linked hunk indices and files. The result is
+a `CrossReferenceResult`; `has_coupling` flips Stage 5 toward `APPROACH_LOCK`.
+
+### Stage 5 – DUAL TAXONOMY CLASSIFIER
+
+`classification/dual_taxonomy.py::classify_task_labels`.
+
+Two phases:
+
+1. **Heuristic pre-classification** (`_heuristic_labels`) – fast binary
+   signals from prior stages: any `OFF_TOPIC` assertion or `UNRELATED` test or
+   misaligned modified test → candidate `OVER_TEST`; any `UNRELATED` hunk →
+   candidate `OVER_PATCH`; certain compound patterns (Task/Patch Mismatch,
+   compilation barrier on `.go` / `.ts` / `.tsx` / `.rs`, pre-staged tests)
+   → candidate `APPROACH_LOCK`; self-referential phrasing → candidate
+   `HIDDEN_CONTEXT`. There is **no float gate** anywhere in this function.
+   `UNCLEAR_DESCRIPTION` is *only* assigned by the LLM in phase 2.
+2. **LLM classifier** (`TASK_CLASSIFIER_SYSTEM_PROMPT`) – receives the full
+   intent, the per-hunk and per-test/per-assertion verdicts, the
+   cross-reference result, the heuristic candidates, and the full problem
+   text. Reassigns / refines / rejects candidates and emits the final label
+   set with evidence and reasoning.
+
+The classifier prompt explicitly encodes the PR-authorship insight from the
+107-case audit: tests and gold patch are co-authored, so `OVER_TEST` without
+`OVER_PATCH` is rare and demands a re-examination of `ANCILLARY` hunks.
+
+### Stage 6 – REPORT BUILD + SEVERITY
+
+`classification/scorer.py::build_report` + `compute_task_severity`.
+
+Severity is **pure set membership** — no arithmetic, no weights:
+
+| Severity | Rule |
+| --- | --- |
+| `SEVERE` | `APPROACH_LOCK ∈ labels` **OR** `OVER_TEST ∈ labels` |
+| `MODERATE` | `OVER_PATCH ∈ labels` **AND** (`HIDDEN_CONTEXT ∈ labels` **OR** `UNCLEAR_DESCRIPTION ∈ labels`) |
+| `MINOR` | any single one of `{OVER_PATCH, UNCLEAR_DESCRIPTION, HIDDEN_CONTEXT, WEAK_COVERAGE}` |
+| `CLEAN` | empty (or only `clean`) label set |
+
+Recommendations are gated by the final label set — only labels that survived
+the classifier produce a recommendation line. The full `ContaminationReport`
+is serialised to `output_dir/reports/<instance_id>.json` and rolled up into
+`summary.csv` and `summary_stats.json`.
+
+### Stage 7 – TASK-TRAJECTORY FUSION
+
+`fusion.py::fuse`.
+
+Deterministic rule engine, no LLM. For each `(task, agent)` pair, combines
+the task's `Severity` + `task_labels` (Axis 1) with the agent's
+`AgentTrajectoryLabel` (Axis 2) and emits a single `FusionVerdict`:
+
+| Verdict | Trigger | Invalidates measurement |
+| --- | --- | --- |
+| `FAIR_PASS` | genuine pass on a clean / minor task | no |
+| `AGENT_CHEATED` | pass with leakage trajectory (`agent_passed_leak`, `_test_aware`, `_package_leak`, `_trained_hack`) | **yes** |
+| `CONTAMINATED_PASS` | genuine pass on a SEVERE / MODERATE task | **yes** |
+| `AMBIGUOUS_PASS` | pass with `agent_unknown` on a clean task | no |
+| `UNFAIR_FAILURE` | failed-with-completed-intent on a task carrying `APPROACH_LOCK` or `OVER_TEST` | **yes** |
+| `FAIR_FAILURE` | failed-with-completed-intent on a clean / minor task | no |
+| `AGENT_DISENGAGED` | failed without producing an intent | no |
+| `INCONCLUSIVE` | none of the above | no |
+
+The `invalidates_measurement` flag is the headline number — it tells you what
+fraction of the benchmark's reported numbers are not actually measurements of
+capability. `run_trajectory_analysis.py` writes a per-pair table into the
+output JSON and a fusion summary section into the markdown report.
 
 ---
 
-## Case Studies
+## Taxonomies
 
-### Smoking Gun: navidrome/navidrome -- GetNowPlaying (`SEVERE`)
+### Axis 1 — Task contamination (multi-label, binary)
 
-**The problem says:** Fix player matching so multiple concurrent plays are preserved.
+| Label | Display | OpenAI Verified equivalent | Meaning |
+| --- | --- | --- | --- |
+| `approach_lock` | Approach Lock | "Narrow test cases" | F2P tests reject valid alternative solutions |
+| `over_test` | Over Test | "Wide test cases" | F2P tests assert on behaviour not described in the problem |
+| `over_patch` | Over Patch | — | Gold patch carries behavioural changes beyond the problem |
+| `unclear_description` | Unclear Description | — | Problem statement is ambiguous or misleading |
+| `hidden_context` | Hidden Context | — | Essential spec lives in hints, not the problem |
+| `weak_coverage` | Weak Coverage | — | F2P tests / patch under-cover the stated criteria |
+| `clean` | Clean | — | No contamination signals (mutually exclusive) |
 
-**What the gold patch also does:** Changes `PlayerId` from `int` to `string` and rewrites scrobbler internals (unrequired).
+### Axis 2 — Agent trajectory (single label per `(task, agent)`)
 
-**What happened to a top agent:**
-- Agent correctly implemented `FindMatch`, `UserAgent` field, `Register` logic, and DB migration
-- Agent did NOT modify scrobbler code or PlayerId type (correctly -- problem doesn't mention these)
-- Agent **failed** `TestCore` because TestCore exercises the unrequired scrobbler changes
-
-**Classification:** `agent_failed_completed_intent` -- the agent solved the stated problem but failed due to approach_lock.
-
-This instance was **CLEAN in v4** (false negative) and correctly **SEVERE in v5** after adding requirements/interface parsing.
-
-> Full analysis: [`case_studies/smoking_gun_navidrome_nowplaying.md`](case_studies/smoking_gun_navidrome_nowplaying.md)
-
-### Smoking Gun: flipt-io/flipt -- Snapshot Cache (`SEVERE`)
-
-**The problem says:** Snapshot cache does not allow controlled deletion of references.
-
-**What the gold patch actually does:** Adds CSRF secure flag, config schema changes, HTTP middleware -- zero F2P tests validate cache deletion.
-
-**38 hunks**: 0 REQUIRED, 26 ANCILLARY, 12 UNRELATED. **23 tests**: 18 ALIGNED to patch, 5 UNRELATED. **Zero F2P tests test the stated problem.**
-
-**Agent result:** Agent correctly implemented cache deletion. Failed because all F2P tests validate CSRF configuration.
-
-> Full analysis: [`case_studies/smoking_gun_flipt_snapshot_cache.md`](case_studies/smoking_gun_flipt_snapshot_cache.md)
-
-### Smoking Gun: ansible/ansible -- iptables (`SEVERE`)
-
-**The problem says:** Fix iptables module to handle specific parameters correctly.
-
-**What the gold patch does:** Modifies pre-existing tests to add `run_command.call_count` assertions that enforce a specific internal implementation.
-
-**Pattern:** `TEST_MUTATION` -- test modifications make tests look legitimate while actually testing undescribed behavior.
-
-> Full analysis: [`case_studies/smoking_gun_ansible_iptables.md`](case_studies/smoking_gun_ansible_iptables.md)
-
-### Additional case studies
-
-- [`case_studies/smoking_gun_openlibrary_wikidata.md`](case_studies/smoking_gun_openlibrary_wikidata.md)
-- [`case_studies/smoking_gun_vuls_macos.md`](case_studies/smoking_gun_vuls_macos.md)
-- [`case_studies/smoking_gun_flipt_agent_trajectory.md`](case_studies/smoking_gun_flipt_agent_trajectory.md)
-- [`case_studies/pro_severe/`](case_studies/pro_severe/) -- 25 SEVERE case studies from SWE-bench Pro
+| Label | Meaning |
+| --- | --- |
+| `agent_passed_genuine` | Solved from problem statement; no leakage signals |
+| `agent_passed_leak` | Final patch ≈ gold patch (high difflib similarity) |
+| `agent_passed_test_aware` | Trajectory references F2P test names or expected values |
+| `agent_passed_package_leak` | Solution comes via `pip install <package>` from PyPI |
+| `agent_passed_trained_hack` | Patch matches a known training-set fingerprint |
+| `agent_failed_completed_intent` | Implemented the described behaviour but failed F2P |
+| `agent_failed_no_intent` | Never produced an intent matching the problem |
+| `agent_unknown` | Insufficient signal — manual review |
 
 ---
 
-## v4 to v5: The Pipeline Fix
-
-Pipeline v4 only parsed `problem_statement` and `hints_text` from SWE-bench Pro tasks. SWE-bench Pro has three evaluation-only fields withheld from agents:
-
-| Field | Visibility | Content |
-|---|---|---|
-| `problem_statement` | Agent sees this | Narrow bug report or feature request |
-| `requirements` | Withheld from agent | Detailed implementation requirements |
-| `interface` | Withheld from agent | New public interface specifications |
-
-Without `requirements` and `interface`, the pipeline incorrectly flagged many tasks as SEVERE because the gold patch appeared to exceed the narrow `problem_statement` -- when in fact the full specification (which agents don't see) justified the scope.
-
-### v4 to v5 severity migration
+## Repository layout
 
 ```
-                  v5 CLEAN   v5 MINOR   v5 MODERATE   v5 SEVERE
-v4 SEVERE           17         54           12            98
-v4 MODERATE          9         43           --            --
-v4 MINOR            --        350           --            --
-v4 CLEAN            --         --           --            --
-```
+bench_cleanser/
+├── pipeline.py             Stage orchestration + concurrency + IO
+├── data_loader.py          HuggingFace loaders for Verified / Pro / Live
+├── repo_manager.py         Shallow git clone + on-disk cache
+├── code_visitor.py         Pre/post-patch test source recovery
+├── static_analysis.py      Import resolver, assertion + call extraction
+├── llm_client.py           AsyncAzureOpenAI w/ AAD token cache + retry
+├── cache.py                Disk cache for LLM responses
+├── schemas.py              JSON Schemas for structured-output enforcement
+├── models.py               Dataclasses (TaskRecord, IntentStatement, …)
+├── presentation.py         Rich-based summary panels + markdown writer
+├── deep_dive.py            Per-instance forensic markdown generator
+├── fusion.py               Stage 7 deterministic fusion engine
+├── parsing/                Stage 1
+│   ├── patch_parser.py
+│   └── test_parser.py
+├── analysis/               Stages 2 – 4C
+│   ├── scope_analyzer.py
+│   ├── structural_diff.py
+│   ├── patch_analyzer.py
+│   ├── test_analyzer.py
+│   └── cross_ref.py
+├── classification/         Stages 5 – 6
+│   ├── dual_taxonomy.py
+│   └── scorer.py
+└── trajectory/             Trajectory side
+    ├── loader.py
+    ├── classifier.py
+    ├── analyzer.py
+    └── models.py
 
-76% of v4 SEVERE instances dropped severity when full context was available. The remaining 98 SEVERE instances are **genuine contamination** -- confirmed by both full-context analysis and agent trajectory validation.
+run_pipeline.py             Entry point: tasks → reports
+run_trajectory_analysis.py  Entry point: reports + trajectories → fusion
+run_deep_dive.py            Entry point: pick N reports, write forensic .md
+run_slides.py               Findings deck generator
+run_trajectory_analysis.py  (see above)
+monitor_pipeline.py         Live progress tail
+audit.py                    Manual audit-tracker helpers
+
+tests/                      pytest suite (53 tests at HEAD)
+config.yaml                 LLM endpoint, concurrency, cache dirs
+```
 
 ---
 
-## Installation
+## Quick start
 
-### Requirements
-
-- Python 3.12+
-- Azure OpenAI API access (or compatible OpenAI endpoint)
-
-### Setup
+### Install
 
 ```bash
+# Development install with all extras (recommended)
 git clone https://github.com/v-liaozhu/bench-cleanser.git
 cd bench-cleanser
-python -m venv .venv
-source .venv/bin/activate  # Linux/macOS
-# .venv\Scripts\activate   # Windows
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev,trajectory]"
+
+# Minimal runtime install (subset; no dev tools)
 pip install -r requirements.txt
 ```
 
-Optional: `docent-python` for Docent agent trajectory loading.
+After install three console scripts are on `$PATH`:
+
+```bash
+bench-cleanser --help              # contamination pipeline
+bench-cleanser-trajectory --help   # Stage 7 fusion + leakage analysis
+bench-cleanser-deep-dive --help    # per-instance forensic markdown
+```
+
+The legacy `python run_pipeline.py` / `run_trajectory_analysis.py` /
+`run_deep_dive.py` entry points still work — they are thin shims over
+the console scripts.
+
+### Run
+
+```powershell
+# Azure CLI login (the LLM client uses az for AAD tokens)
+az login
+
+# 50 SWE-bench Pro tasks
+bench-cleanser --dataset pro --max-tasks 50 --output output_pro_v21 --concurrency 5
+
+# Stage 7 fusion against those reports
+bench-cleanser-trajectory `
+    --reports-dir output_pro_v21/reports `
+    --trajectory-source <jsonl-file or HF dataset or Docent collection> `
+    --output output_pro_v21/trajectory_fusion.md
+```
+
+For a single task:
+
+```bash
+bench-cleanser --instance-id ansible__ansible-a26c325b... --output output_one
+```
+
+For deep-dive forensic markdown on selected reports:
+
+```bash
+bench-cleanser-deep-dive --reports-dir output_pro_v21/reports --severity SEVERE
+```
 
 ---
 
 ## Configuration
 
-Create a `config.yaml` in the project root:
+Everything that has a sensible default lives in `config.yaml`. Highlights:
 
 ```yaml
 llm:
-  base_url: "https://your-openai-endpoint.azure-api.net/"
+  base_url: "https://cloudgpt-openai.azure-api.net/"
   api_version: "2025-04-01-preview"
-  model: "gpt-5.4-pro-20260305"
+  model: "gpt-5.4-20260305"
   max_tokens: 65536
   reasoning_effort: "high"
   max_concurrent_requests: 10
-  retry_attempts: 7
+  retry_attempts: 7              # bounded for API errors
   retry_delay_seconds: 5.0
-
 pipeline:
-  concurrency: 5
+  concurrency: 3                 # tasks in parallel
   cache_dir: ".cache/llm_responses"
-  output_dir: "output"
-
+  output_dir: "output_pro_v6"
 code_visitation:
+  enabled: true
   repo_cache_dir: ".cache/repos"
   clone_timeout_seconds: 120
   max_source_context_lines: 200
 ```
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `llm.model` | `gpt-5.4-pro-20260305` | Model deployment name |
-| `llm.reasoning_effort` | `high` | Classification quality over latency |
-| `pipeline.concurrency` | `5` | Parallel task processing |
-| `code_visitation.enabled` | `true` | Git clone + AST extraction |
+`llm_client.py` sets `timeout=None` on every chat call and retries
+`APIConnectionError` indefinitely. `retry_attempts` only governs API errors
+(rate limits, 5xx, validator errors).
+
+Authentication is performed by `cloudgpt_aoai.get_openai_token_provider`,
+which shells out to `az` once and reuses the token for ~50 minutes.
 
 ---
 
-## Usage
+## Outputs
 
-### Run the analysis pipeline
+Each pipeline run writes:
 
-```bash
-# SWE-bench Pro (recommended)
-python run_pipeline.py --dataset pro --config config.yaml
-
-# SWE-bench Live
-python run_pipeline.py --dataset live --config config.yaml
-
-# SWE-bench Verified
-python run_pipeline.py --dataset verified
-
-# Both Pro + Verified
-python run_pipeline.py --dataset both
-
-# Single task
-python run_pipeline.py --instance-id django__django-11964
-
-# Resume interrupted run
-python run_pipeline.py --dataset pro --resume
+```
+output_dir/
+├── reports/<instance_id>.json   # one ContaminationReport per task
+├── summary.csv                  # severity + label flags per task
+└── summary_stats.json           # aggregate counts
 ```
 
-### Generate reports
+`ContaminationReport.to_dict()` keys: `instance_id`, `severity`, `intent`,
+`patch_analysis` (per-hunk verdicts), `test_analysis` (per-test +
+per-assertion), `description_clarity`, `task_labels`, `agent_labels`,
+`recommendations`.
 
-```bash
-# Deep dive case studies (SEVERE by default)
-python run_deep_dive.py --reports-dir output_pro_v6/reports
+`run_trajectory_analysis.py` adds:
 
-# Specific severity or instances
-python run_deep_dive.py --reports-dir output_pro_v6/reports --severity MODERATE
-python run_deep_dive.py --reports-dir output_pro_v6/reports --instance-ids <id1> <id2>
-
-# MARP slide deck
-python run_slides.py --reports-dir output_pro_v6/reports --output slides/findings.md
-npx @marp-team/marp-cli slides/findings.md --pdf
 ```
-
-### Agent trajectory analysis
-
-```bash
-# Full trajectory analysis with LLM
-python run_trajectory_analysis.py \
-  --reports-dir output_pro_v6/reports \
-  --trajectory-source trajectory_data/ \
-  --config config.yaml
-
-# Load from Docent collection
-python run_trajectory_analysis.py \
-  --reports-dir output_pro_v6/reports \
-  --trajectory-source 032fb63d-4992-4bfc-911d-3b7dafcb931f \
-  --docent-api-key dk_... \
-  --model-filter "Claude Opus 4.1 - paper" \
-  --output trajectory_analysis.md
-
-# Load from HuggingFace
-python run_trajectory_analysis.py \
-  --reports-dir output_pro_v6/reports \
-  --trajectory-source SWE-bench-Live/SWE-agent-trajectories \
-  --hf-split train
+output_dir/
+├── trajectory_fusion.md         # per-instance narratives + fusion table
+└── trajectory_fusion.json       # analyses[], leakage_rates{}, fusion[]
 ```
-
-### Monitor a running pipeline
-
-```bash
-python monitor_pipeline.py --output-dir output_pro_v6 --total 731
-```
-
-### Unified audit CLI
-
-```bash
-# Fetch data
-python audit.py fetch swebench              # Cache SWE-bench Pro dataset
-python audit.py fetch trajectories           # Fetch trajectory summary from Docent
-
-# LLM trajectory audit
-python audit.py analyze all --blind          # Blind analysis (no pipeline context)
-python audit.py analyze 4 --force            # Re-analyze case 4
-
-# Human audit workflow
-python audit.py status                       # Progress dashboard
-python audit.py show 4                       # Detailed case view
-python audit.py record 4 CONFIRMED_SEVERE "test_coupling evidence"
-
-# Export and reports
-python audit.py export tracker               # Regenerate tracker CSV
-python audit.py export triage                # Generate reviewer triage CSV
-python audit.py report case-studies --num 25 # Generate case study markdown
-python audit.py report forensic              # Run forensic analysis
-```
-
-Requires `DOCENT_API_KEY` environment variable for trajectory fetching.
 
 ---
 
-## Output Format
+## How to interpret a report
 
-### Per-task JSON report
+Every task produces a JSON file under `<output_dir>/reports/`. A
+representative one ships under [`examples/sample_run/reports/`](examples/sample_run/);
+walk through it field-by-field:
 
-```json
+```jsonc
 {
-  "instance_id": "instance_navidrome__navidrome-97434...",
-  "severity": "SEVERE",
-  "intent": {
-    "core_requirement": "Fix GetNowPlaying to show all active plays",
-    "acceptance_criteria": ["..."],
-    "ambiguity_score": 0.15
-  },
-  "scope_creep": {
-    "total_hunks": 20,
-    "required_count": 8,
-    "unrelated_count": 4,
-    "has_excess": true,
-    "hunks": [{ "verdict": "unrelated", "confidence": 0.91, "reasoning": "..." }]
-  },
-  "wide_test": {
-    "total_tests": 1,
-    "on_topic_assertions": 12,
-    "off_topic_assertions": 3,
-    "has_excess": true,
-    "tests": [{ "intent_match": "tangential", "assertions": [...] }]
-  },
+  "instance_id": "ansible__ansible-0ea40e09...",
+  "severity": "MINOR",                    // bucket: CLEAN | MINOR | MODERATE | SEVERE
+  "intent": { /* Stage 2 IntentStatement */ },
+  "excess_patch": { /* Stage 4A summary */ },
+  "excess_test":  { /* Stage 4B summary */ },
+  "vague_spec":   { /* DescriptionClarity */ },
   "task_labels": [
-    { "label": "approach_lock", "confidence": 0.84, "evidence": ["..."] },
-    { "label": "scope_creep", "confidence": 0.93, "evidence": ["..."] }
-  ]
+    {
+      "label": "weak_coverage",
+      "evidence": [
+        "Cross-reference Stage 4C: 0 call edges from F2P tests to changed blocks"
+      ],
+      "reasoning": "..."
+    }
+  ],
+  "agent_labels": [ /* heuristic axis-2 candidates if no trajectory was joined */ ],
+  "recommendations": [ /* short remediation hints for benchmark maintainers */ ]
 }
 ```
 
-### Directory layout
+Reading order, in priority:
 
-```
-output_pro_v5/
-├── reports/                     # One JSON file per task (731 files)
-│   ├── instance_navidrome__navidrome-97434....json
-│   └── ...
-├── summary.csv                  # Per-task severity, labels, key metrics
-└── summary_stats.json           # Aggregated statistics
-```
+1. **`severity`** → answers "should I drop this row?" at the coarsest
+   level. `CLEAN` and `MINOR` are usually safe; `MODERATE` and `SEVERE`
+   warrant either a fix or an exclusion.
+2. **`task_labels[*].label`** → tells you *why* the severity is what
+   it is. Each label maps to a section of
+   [`docs/TAXONOMY.md`](docs/TAXONOMY.md).
+3. **`task_labels[*].evidence`** → the concrete artefact that supports
+   the label. If the evidence is wrong, the label is wrong; if the
+   evidence is missing, treat the label as not-yet-trusted and
+   re-classify with a manual override.
+4. **`intent`** → if the labels look surprising, check whether intent
+   extraction got the problem right. `intent.acceptance_criteria`
+   is the spine — most contamination labels are downstream of that
+   list.
+5. **`recommendations`** → human-targeted hints, not machine-readable
+   verdicts. Use them to write a fix or a justification, not to drive
+   automated filtering.
 
----
-
-## Project Structure
-
-```
-bench-cleanser/
-│
-├── run_pipeline.py                    # Main analysis pipeline
-├── run_deep_dive.py                   # Per-case deep dive reports
-├── run_slides.py                      # MARP slide deck generation
-├── run_trajectory_analysis.py         # Agent trajectory classification
-├── monitor_pipeline.py                # Live pipeline monitoring dashboard
-├── config.yaml                        # Pipeline configuration
-├── requirements.txt                   # Python dependencies
-│
-├── bench_cleanser/                    # Core library
-│   ├── models.py                      # Data models, enums, serialization
-│   ├── pipeline.py                    # Pipeline orchestrator (Stages 1-5)
-│   ├── llm_client.py                  # Azure OpenAI client
-│   ├── cache.py                       # LLM response caching
-│   ├── data_loader.py                 # HuggingFace dataset loader
-│   ├── repo_manager.py               # Git repository management
-│   ├── code_visitor.py                # Stage 1.5: AST source extraction
-│   ├── static_analysis.py            # Import resolution, call graph
-│   ├── deep_dive.py                   # Case study markdown generation
-│   ├── presentation.py               # MARP slide generation
-│   │
-│   ├── analysis/                      # Analysis stages
-│   │   ├── scope_analyzer.py          # Stage 2: intent extraction
-│   │   ├── structural_diff.py        # Stage 3: AST structural diff
-│   │   ├── patch_analyzer.py          # Stage 4A: patch hunk classification
-│   │   ├── test_analyzer.py           # Stage 4B: test + assertion classification
-│   │   └── cross_ref.py              # Cross-reference dependency detection
-│   │
-│   ├── classification/                # Taxonomy and scoring
-│   │   ├── dual_taxonomy.py           # 8-label taxonomy, severity rules
-│   │   └── scorer.py                  # Final report building
-│   │
-│   └── trajectory/                    # Agent trajectory analysis
-│       ├── analyzer.py                # Orchestrator
-│       ├── classifier.py             # 3-tier classifier (heuristic/LLM/cross-agent)
-│       ├── loader.py                  # Data loading (JSONL, JSON, HuggingFace, Docent)
-│       └── models.py                  # Trajectory data structures
-│
-├── tests/                             # Unit tests
-├── case_studies/                      # Smoking gun analyses + 25 Pro SEVERE cases
-├── slides/                            # MARP presentation decks
-├── audit.py                           # Unified audit CLI (fetch/analyze/status/show/record/export/report)
-├── output_v3/                         # SWE-bench Verified run (500 reports)
-├── output_pro_v6/                     # SWE-bench Pro v6 run (731 reports)
-└── audits/severe/                     # SEVERE case audit workspace
-    ├── audit_tracker_v2.csv           # 101-case tracker with verdicts
-    ├── swebench_pro_cache.json        # Cached SWE-bench Pro dataset
-    ├── trajectory_cache/              # Per-case agent trajectories
-    ├── trajectory_summary_v2.json     # Resolution rates for all 731 tasks
-    ├── llm_analysis/                  # Per-case LLM audit results
-    └── notes_v2/                      # Per-case audit notes
-```
+To go further — combine with agent trajectories and get fairness
+verdicts — run `bench-cleanser-trajectory` against the reports
+directory. The resulting `trajectory_fusion.json` contains a `fusion[]`
+array whose verdicts are explained in [`docs/FUSION.md`](docs/FUSION.md).
 
 ---
 
-## Development
-
-### Running tests
+## Testing
 
 ```bash
-python -m pytest tests/ -v
+pytest tests/ -q
 ```
 
-### Adding a new contamination label
+86 tests at HEAD covering: patch parser, test parser, scorer, dual
+taxonomy severity rules, OVER_TEST heuristic collapse regression,
+fusion verdicts and the full Rule 4 (AMBIGUOUS_PASS / INCONCLUSIVE)
+matrix, LLM client retry behaviour, and trajectory classifier
+(similarity computation, pip-install detection, test-reference
+detection, heuristic-only classification, cross-agent inference, and
+the structured-output happy/error paths against a fake LLM client).
 
-1. Add enum value to `TaskContaminationLabel` in `models.py`
-2. Add label definition to `LABEL_DEFINITIONS` in `dual_taxonomy.py`
-3. Add heuristic detection rule in `_heuristic_labels()` in `dual_taxonomy.py`
-4. Update `compute_task_severity()` bucket rules if applicable
-5. Add label to `TASK_CLASSIFIER_SYSTEM_PROMPT` in `dual_taxonomy.py`
+Lint:
 
-### LLM prompt architecture
+```bash
+ruff check bench_cleanser tests
+```
 
-| Prompt | File | Stage | Information Barrier |
-|--------|------|-------|---------------------|
-| Intent extraction | `scope_analyzer.py` | 2 | BLIND to gold patch |
-| Patch classification | `patch_analyzer.py` | 4A | Sees intent + patch |
-| Test classification | `test_analyzer.py` | 4B | Sees intent + tests |
-| Task classifier | `dual_taxonomy.py` | 5 | Sees all signals |
-| Agent classifier | `dual_taxonomy.py` | 5 | Sees trajectory |
-| Trajectory analysis | `trajectory/classifier.py` | -- | Sees full trajectory |
+CI runs both on Python 3.11 and 3.12 — see
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ---
 
-## References
+## Design principles
 
-- OpenAI. ["Why we no longer evaluate SWE-bench Verified."](https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/) 2026.
-- OpenAI. ["How we monitor internal coding agents for misalignment."](https://openai.com/index/how-we-monitor-internal-coding-agents-misalignment/) 2026.
-- Li et al. ["The SWE-Bench Illusion."](https://arxiv.org/html/2506.12286v3) arXiv, 2025.
-- Jimenez et al. ["SWE-bench: Can Language Models Resolve Real-World GitHub Issues?"](https://arxiv.org/abs/2310.06770) ICLR 2024.
+1. **No float thresholds in contamination logic.** Severity is set membership;
+   labels are evidence-driven binary assignments. The only floats in the
+   pipeline are `ambiguity_score` and `gold_patch_similarity`, both of which
+   are advisory context for the LLM, never gates.
+2. **PR-authorship realism.** The classifier prompt and the severity rules
+   both encode the audit insight that gold patch and F2P tests are co-authored.
+   `OVER_TEST` without `OVER_PATCH` is rare and is treated as maximum-attention
+   evidence rather than a softer bucket.
+3. **Cite or shut up.** Every stage that emits a verdict also emits per-item
+   evidence. Reports never contain a label without a reason.
+4. **No silent truncation.** Prompts include the full problem statement,
+   requirements, interface, hints, decomposition, intent, per-hunk reasoning,
+   per-assertion list, and structural context. Truncation only happens when
+   astred is genuinely unavailable.
+5. **Connectivity-fault-tolerant.** The LLM client retries `APIConnectionError`
+   forever and bounds retries on real API errors. Long-running batches survive
+   transient network drops without losing work.
+6. **Stage 7 is pure rules.** Fusion is deliberately deterministic. The LLM
+   does not get a vote on whether a measurement is fair — that decision is
+   reproducible from the two axis labels alone.
 
 ---
 
-## License
+## Provenance — what changed and why
 
-Internal research tool. Not licensed for external distribution.
+| Commit | What | Why |
+| --- | --- | --- |
+| `b2b3b1c` | v1.5.0 baseline | end-to-end pipeline + trajectory analysis |
+| `33e185a` | v2.0 overhaul | binary severity, archaic class rename, astred API fix, infinite connectivity retry, no truncation |
+| `493cfd6` | severity rule fix + over_test hardening + Stage 7 fusion | audit-driven severity rewrite (`OVER_TEST` → SEVERE), removal of the `description_clarity.score >= 0.4` heuristic gate, prompt enrichment for OVER_TEST detection, new `bench_cleanser/fusion.py` |
+
+Latest run: `output_pro_v21/` (50 SWE-bench Pro tasks, 22 min wall clock,
+zero `astred_core failed` warnings). Severity distribution under the
+new rules:
+
+| Severity | Count | % |
+| --- | --- | --- |
+| CLEAN | 12 | 24% |
+| MINOR | 27 | 54% |
+| MODERATE | 0 | 0% |
+| SEVERE | 11 | 22% |
+
+Label distribution: `weak_coverage`=28, `over_patch`=12, `over_test`=9,
+`approach_lock`=4, `clean`=12.

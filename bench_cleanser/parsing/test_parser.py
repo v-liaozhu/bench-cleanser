@@ -11,7 +11,6 @@ import re
 from bench_cleanser.models import PatchHunk, TestHunk, TestModificationType
 from bench_cleanser.parsing.patch_parser import parse_patch
 
-
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

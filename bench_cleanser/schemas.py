@@ -10,11 +10,9 @@ All schemas use ``strict=True`` so the API rejects non-conforming output.
 
 from __future__ import annotations
 
-from enum import Enum
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
-
 
 # ── Stage 2: Intent Extraction ──────────────────────────────────────
 
@@ -246,5 +244,73 @@ class TaskClassificationResponse(BaseModel):
             "return a single 'clean' label. When any contamination label "
             "is present, do NOT include 'clean'."
         ),
+    )
+
+
+# ── Stage 7 (per-agent): Trajectory Classification ──────────────────
+
+
+class TrajectoryClassificationResponse(BaseModel):
+    """Structured output for per-agent trajectory classification."""
+
+    pattern: Literal[
+        "GENUINE_SOLUTION",
+        "GOLD_PATCH_LEAK",
+        "PACKAGE_LEAK",
+        "TEST_AWARE",
+        "PARTIAL_MATCH",
+        "UNKNOWN",
+    ] = Field(
+        ...,
+        description=(
+            "Leakage pattern that best characterises how the agent arrived at "
+            "its final patch. UNKNOWN is reserved for cases with insufficient "
+            "trajectory data."
+        ),
+    )
+    trajectory_label: Literal[
+        "agent_passed_genuine",
+        "agent_passed_leak",
+        "agent_passed_package_leak",
+        "agent_passed_test_aware",
+        "agent_passed_trained_hack",
+        "agent_failed_completed_intent",
+        "agent_failed_no_intent",
+        "agent_unknown",
+    ] = Field(
+        ...,
+        description=(
+            "Axis-2 fairness label. Must be consistent with `pattern` and with "
+            "the agent's reported pass/fail outcome — passed-* labels only "
+            "when the agent resolved the task; failed-* labels only when it "
+            "did not."
+        ),
+    )
+    evidence_strength: Literal["strong", "moderate", "weak"] = Field(
+        ...,
+        description="How well the available evidence supports the chosen labels.",
+    )
+    reasoning: str = Field(
+        ...,
+        description=(
+            "Detailed explanation of the classification, citing concrete "
+            "actions, files, or patch content from the trajectory."
+        ),
+    )
+    causal_chain: str = Field(
+        default="",
+        description=(
+            "Short description of what led the agent to its approach "
+            "(e.g. infrastructure failure forced a workaround, agent "
+            "anchored on stack-trace search). Empty string if not applicable."
+        ),
+    )
+    key_evidence: list[str] = Field(
+        default_factory=list,
+        description="Bulleted concrete evidence items (steps, quotes, file refs).",
+    )
+    agent_behavior_summary: str = Field(
+        default="",
+        description="One- or two-sentence characterisation of the agent's behaviour.",
     )
 

@@ -2,7 +2,6 @@
 
 from bench_cleanser.parsing.patch_parser import get_files_from_patch, parse_patch
 
-
 # ── parse_patch ───────────────────────────────────────────────────────
 
 
