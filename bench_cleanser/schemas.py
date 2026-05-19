@@ -68,7 +68,14 @@ class IntentExtractionResponse(BaseModel):
             "Reporter's suggested approach to fix. Empty string if none."
         ),
     )
-    legitimacy: str = Field(
+    legitimacy: Literal[
+        "bug",
+        "feature_request",
+        "enhancement",
+        "question",
+        "discussion",
+        "unclear",
+    ] = Field(
         ...,
         description=(
             "Classification of the problem type. One of: bug, feature_request, "

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
+import shutil
 import subprocess
 import threading
 from collections.abc import Sequence
@@ -157,12 +158,13 @@ class RepoManager:
         dest.mkdir(parents=True, exist_ok=True)
 
         try:
-            # Step 1: init + add remote
+            # Step 1: init + configure remote idempotently
             self._run_git(["git", "init"], cwd=dest)
-            self._run_git(
-                ["git", "remote", "add", "origin", url],
-                cwd=dest,
-            )
+            remotes = self._run_git(["git", "remote"], cwd=dest).stdout.split()
+            if "origin" in remotes:
+                self._run_git(["git", "remote", "set-url", "origin", url], cwd=dest)
+            else:
+                self._run_git(["git", "remote", "add", "origin", url], cwd=dest)
 
             # Step 2: fetch the specific commit (shallow)
             self._run_git(
@@ -184,6 +186,11 @@ class RepoManager:
 
         except (subprocess.SubprocessError, OSError) as exc:
             logger.error("Clone failed for %s @ %s: %s", repo, base_commit[:12], exc)
+            try:
+                if dest.exists():
+                    shutil.rmtree(dest)
+            except OSError as cleanup_exc:
+                logger.warning("Failed to clean partial clone at %s: %s", dest, cleanup_exc)
             return None
 
     def _run_git(

@@ -20,10 +20,6 @@ import pathlib
 import sys
 from collections import Counter
 
-# ─────────────────────────────────────────────────────────────────────
-# bench-cleanser  (contamination pipeline)
-# ─────────────────────────────────────────────────────────────────────
-
 
 def _parse_pipeline_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
@@ -58,9 +54,6 @@ def _parse_pipeline_args() -> argparse.Namespace:
         "--split", default=None,
         help="Dataset split for SWE-bench Live (e.g., test, verified, full)",
     )
-    # Resume is on by default — skipping completed tasks is what you want
-    # 99% of the time, since each task costs LLM calls. Use --no-resume to
-    # reprocess from scratch.
     p.add_argument(
         "--resume", action="store_true", default=True,
         help="Resume from checkpoint — skip tasks with existing reports (default)",
@@ -183,11 +176,6 @@ def main() -> None:
     print(f"Output written to: {config.output_dir}/")
 
 
-# ─────────────────────────────────────────────────────────────────────
-# bench-cleanser-trajectory  (Stage 7 fusion + leakage analysis)
-# ─────────────────────────────────────────────────────────────────────
-
-
 def _parse_trajectory_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="bench-cleanser-trajectory",
@@ -265,11 +253,6 @@ def trajectory_main() -> None:
         print(summary)
     else:
         print(f"Trajectory analysis written to: {args.output}")
-
-
-# ─────────────────────────────────────────────────────────────────────
-# bench-cleanser-deep-dive  (forensic per-instance markdown)
-# ─────────────────────────────────────────────────────────────────────
 
 
 def _parse_deep_dive_args() -> argparse.Namespace:

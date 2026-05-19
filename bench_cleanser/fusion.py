@@ -1,20 +1,11 @@
 """Stage 7: Task-Trajectory Fusion.
 
-Combines the two independent axes produced by the pipeline into a single
-fairness verdict per (task, agent) pair:
+Combines Axis 1 (task contamination) and Axis 2 (per-agent trajectory)
+into a single fairness verdict per (task, agent). Deterministic — no
+LLM call. Every verdict is reproducible from the two axis labels and
+the trajectory's `resolved` outcome.
 
-  - Axis 1: task-level contamination (Severity + TaskContaminationLabel set)
-            — produced by bench_cleanser.classification.scorer
-  - Axis 2: per-agent trajectory classification (AgentTrajectoryLabel)
-            — produced by bench_cleanser.trajectory.classifier
-
-The fusion verdict answers the question a human reviewer actually cares about:
-"Given what the benchmark asked and what the agent did, was this a fair
-measurement, a contaminated pass, a false failure, or something we should
-discard?"
-
-This stage is deliberately rule-based and deterministic — no LLM calls.
-Every verdict is reproducible from the two axis labels.
+See docs/FUSION.md for the rule reference and worked examples.
 """
 
 from __future__ import annotations
@@ -32,34 +23,15 @@ from bench_cleanser.trajectory.models import TrajectoryAnalysis
 
 
 class FusionVerdict(str, Enum):
-    """Combined fairness verdict per (task, agent)."""
+    """Combined fairness verdict per (task, agent). See docs/FUSION.md."""
 
-    # Agent passed, task is clean => genuine measurement of capability.
     FAIR_PASS = "fair_pass"
-
-    # Agent passed via a leak (gold patch, test-aware, package, trained hack).
-    # The task may be clean; the measurement is still invalid for this agent.
     AGENT_CHEATED = "agent_cheated"
-
-    # Agent passed a contaminated task.  Even if the trajectory looks
-    # genuine, the pass is over a broken measurement.
     CONTAMINATED_PASS = "contaminated_pass"
-
-    # Agent passed a clean task but via ambiguous means (UNKNOWN trajectory).
     AMBIGUOUS_PASS = "ambiguous_pass"
-
-    # Agent failed; task is contaminated in a way that likely caused the
-    # failure (approach_lock, over_test).  This is an UNFAIR failure.
     UNFAIR_FAILURE = "unfair_failure"
-
-    # Agent failed; task is clean or only minor.  Genuine capability gap.
     FAIR_FAILURE = "fair_failure"
-
-    # Agent failed without actually engaging the problem (no intent).
-    # Not a benchmark quality signal either way.
     AGENT_DISENGAGED = "agent_disengaged"
-
-    # Nothing is clear.
     INCONCLUSIVE = "inconclusive"
 
 
@@ -116,17 +88,8 @@ def fuse(
 ) -> TaskTrajectoryFusion:
     """Fuse one task report with one agent trajectory analysis.
 
-    Rules (evaluated top-down; first match wins):
-
-    1. Agent passed with leak   -> AGENT_CHEATED          (invalidates)
-    2. Agent passed, task SEVERE/MODERATE -> CONTAMINATED_PASS (invalidates)
-    3. Agent passed genuine, task clean/minor -> FAIR_PASS
-    4. Agent passed unknown     -> AMBIGUOUS_PASS
-    5. Agent failed completed intent, task has APPROACH_LOCK or OVER_TEST
-                                -> UNFAIR_FAILURE         (invalidates)
-    6. Agent failed completed intent, task clean/minor -> FAIR_FAILURE
-    7. Agent failed no intent   -> AGENT_DISENGAGED
-    8. Otherwise                -> INCONCLUSIVE
+    Rules are evaluated top-down; first match wins. See docs/FUSION.md
+    for the full rule reference.
     """
     labels = [a.label for a in report.task_labels]
     label_set = set(labels)
@@ -177,12 +140,8 @@ def fuse(
             invalidates=False, evidence=evidence,
         )
 
-    # Rule 4 — passed but we cannot classify the trajectory.
-    # Driven by the trajectory's reported outcome (`resolved`), not by analysis
-    # identity. A passed-but-UNKNOWN trajectory on a clean task is genuinely
-    # AMBIGUOUS_PASS; on a contaminated task it is INCONCLUSIVE because the
-    # contamination labels would otherwise have produced CONTAMINATED_PASS
-    # had we been able to confirm the pass was clean-trajectory.
+    # Rule 4 — passed but trajectory unknown. Discriminator is
+    # `trajectory.resolved`; see docs/FUSION.md.
     if traj in _AGENT_UNKNOWN:
         evidence.append("Trajectory classification inconclusive")
         if trajectory.resolved:

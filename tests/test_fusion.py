@@ -69,8 +69,52 @@ def test_agent_cheated_leak_on_clean_task():
     assert f.invalidates_measurement
 
 
+def test_agent_cheated_test_aware_on_clean_task():
+    r = _report(Severity.CLEAN, [TaskContaminationLabel.CLEAN])
+    t = _traj(
+        AgentTrajectoryLabel.AGENT_PASSED_TEST_AWARE,
+        LeakagePattern.TEST_AWARE,
+    )
+    f = fuse(r, t)
+    assert f.verdict == FusionVerdict.AGENT_CHEATED
+    assert f.invalidates_measurement
+
+
+def test_agent_cheated_package_leak_on_clean_task():
+    r = _report(Severity.CLEAN, [TaskContaminationLabel.CLEAN])
+    t = _traj(
+        AgentTrajectoryLabel.AGENT_PASSED_PACKAGE_LEAK,
+        LeakagePattern.PACKAGE_LEAK,
+    )
+    f = fuse(r, t)
+    assert f.verdict == FusionVerdict.AGENT_CHEATED
+    assert f.invalidates_measurement
+
+
+def test_agent_cheated_trained_hack_on_clean_task():
+    r = _report(Severity.CLEAN, [TaskContaminationLabel.CLEAN])
+    t = _traj(
+        AgentTrajectoryLabel.AGENT_PASSED_TRAINED_HACK,
+        LeakagePattern.PARTIAL_MATCH,
+    )
+    f = fuse(r, t)
+    assert f.verdict == FusionVerdict.AGENT_CHEATED
+    assert f.invalidates_measurement
+
+
 def test_contaminated_pass_severe_task_genuine_trajectory():
     r = _report(Severity.SEVERE, [TaskContaminationLabel.OVER_TEST])
+    t = _traj(AgentTrajectoryLabel.AGENT_PASSED_GENUINE, LeakagePattern.GENUINE_SOLUTION)
+    f = fuse(r, t)
+    assert f.verdict == FusionVerdict.CONTAMINATED_PASS
+    assert f.invalidates_measurement
+
+
+def test_contaminated_pass_moderate_task_genuine_trajectory():
+    r = _report(
+        Severity.MODERATE,
+        [TaskContaminationLabel.OVER_PATCH, TaskContaminationLabel.UNCLEAR_DESCRIPTION],
+    )
     t = _traj(AgentTrajectoryLabel.AGENT_PASSED_GENUINE, LeakagePattern.GENUINE_SOLUTION)
     f = fuse(r, t)
     assert f.verdict == FusionVerdict.CONTAMINATED_PASS

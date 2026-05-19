@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import Callable
 from typing import Any, TypeVar
 
 import openai
@@ -40,7 +41,7 @@ logger = logging.getLogger(__name__)
 # 400s ("unsupported operation") during model rollouts and capacity shifts.
 # We also catch Azure credential errors (token expiry, az CLI hiccups)
 # which are transient and resolve on retry.
-_RETRYABLE_ERRORS: tuple[type[BaseException], ...] = [
+_RETRYABLE_ERRORS_LIST: list[type[BaseException]] = [
     APIConnectionError,
     APITimeoutError,
     AuthenticationError,
@@ -53,21 +54,21 @@ _RETRYABLE_ERRORS: tuple[type[BaseException], ...] = [
 # failures are retried rather than treated as fatal.
 try:
     from azure.identity import CredentialUnavailableError
-    _RETRYABLE_ERRORS.append(CredentialUnavailableError)
+    _RETRYABLE_ERRORS_LIST.append(CredentialUnavailableError)
 except ImportError:
     pass
 try:
     from azure.core.exceptions import ClientAuthenticationError
-    _RETRYABLE_ERRORS.append(ClientAuthenticationError)
+    _RETRYABLE_ERRORS_LIST.append(ClientAuthenticationError)
 except ImportError:
     pass
 
-_RETRYABLE_ERRORS = tuple(_RETRYABLE_ERRORS)
+_RETRYABLE_ERRORS: tuple[type[BaseException], ...] = tuple(_RETRYABLE_ERRORS_LIST)
 
 
 def _create_async_client(
     config: PipelineConfig,
-) -> tuple[openai.AsyncAzureOpenAI, callable]:
+) -> tuple[openai.AsyncAzureOpenAI, Callable[[], None]]:
     """Create an AsyncAzureOpenAI client using CloudGPT token provider.
 
     Uses the cloudgpt module's Azure AD token provider with ``az`` CLI
@@ -185,17 +186,18 @@ class LLMClient:
                 content = response.choices[0].message.content or ""
                 return content
             except APIConnectionError as exc:
-                # Pure network connectivity failure — could be ISP dropped,
-                # DNS flake, or Azure edge down. Wait it out indefinitely.
                 last_exc = exc
-                delay = min(5.0 * (2 ** min(attempt - 1, 4)), 60.0)
+                if attempt >= self._retry_attempts:
+                    break
+                delay = min(self._retry_delay * (2 ** (attempt - 1)), 60.0)
                 logger.warning(
-                    "LLM connectivity error (attempt %d, will wait forever for network): %s — "
-                    "retrying in %.1fs",
-                    attempt, exc, delay,
+                    "LLM connectivity error (attempt %d/%d): %s – retrying in %.1fs",
+                    attempt,
+                    self._retry_attempts,
+                    exc,
+                    delay,
                 )
                 await asyncio.sleep(delay)
-                # No retry cap for connectivity errors — loop forever
                 continue
             except _RETRYABLE_ERRORS as exc:
                 last_exc = exc
@@ -229,12 +231,12 @@ class LLMClient:
 
         If direct ``json.loads`` fails the method tries to extract a JSON
         object from a fenced code block (```json ... ```  or  ``` ... ```).
-        Returns an empty dict on failure.
+        Raises ``ValueError`` if no valid JSON object can be extracted.
         """
         # Fast path
         text = text.strip()
         try:
-            return json.loads(text)  # type: ignore[no-any-return]
+            return json.loads(text)
         except json.JSONDecodeError:
             pass
 
@@ -242,7 +244,7 @@ class LLMClient:
         match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
         if match:
             try:
-                return json.loads(match.group(1).strip())  # type: ignore[no-any-return]
+                return json.loads(match.group(1).strip())
             except json.JSONDecodeError:
                 pass
 
@@ -251,12 +253,12 @@ class LLMClient:
         brace_end = text.rfind("}")
         if brace_start != -1 and brace_end > brace_start:
             try:
-                return json.loads(text[brace_start : brace_end + 1])  # type: ignore[no-any-return]
+                return json.loads(text[brace_start : brace_end + 1])
             except json.JSONDecodeError:
                 pass
 
         logger.error("Failed to parse JSON from LLM response: %.200s", text)
-        return {}
+        raise ValueError("Failed to parse JSON from LLM response")
 
     # ------------------------------------------------------------------
     # Public async API
@@ -450,8 +452,8 @@ class LLMClient:
     # Synchronous convenience wrappers
     # ------------------------------------------------------------------
 
-    def query_sync(self, system_prompt: str, user_prompt: str) -> str:
-        """Blocking version of :meth:`query`."""
+    @staticmethod
+    def _run_sync(coro: Any) -> Any:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -461,27 +463,16 @@ class LLMClient:
             import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(
-                    asyncio.run, self.query(system_prompt, user_prompt)
-                ).result()
+                return pool.submit(asyncio.run, coro).result()
 
-        return asyncio.run(self.query(system_prompt, user_prompt))
+        return asyncio.run(coro)
+
+    def query_sync(self, system_prompt: str, user_prompt: str) -> str:
+        """Blocking version of :meth:`query`."""
+        return self._run_sync(self.query(system_prompt, user_prompt))
 
     def query_json_sync(
         self, system_prompt: str, user_prompt: str
     ) -> dict[str, Any]:
         """Blocking version of :meth:`query_json`."""
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop is not None and loop.is_running():
-            import concurrent.futures
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(
-                    asyncio.run, self.query_json(system_prompt, user_prompt)
-                ).result()
-
-        return asyncio.run(self.query_json(system_prompt, user_prompt))
+        return self._run_sync(self.query_json(system_prompt, user_prompt))

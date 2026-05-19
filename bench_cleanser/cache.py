@@ -105,7 +105,7 @@ class ResponseCache:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(payload)
             os.replace(tmp_path, str(path))
-        except BaseException:
+        except Exception:
             # Clean up the temp file on failure.
             try:
                 os.unlink(tmp_path)

@@ -12,6 +12,7 @@ import pathlib
 import re
 from collections.abc import Sequence
 
+from bench_cleanser.code_visitor import extract_function_source
 from bench_cleanser.models import Assertion, CallTarget, TestedFunction
 
 logger = logging.getLogger(__name__)
@@ -119,7 +120,6 @@ def extract_assertions(test_source: str) -> list[Assertion]:
         # Plain assert statements
         if isinstance(node, ast.Assert):
             stmt = _get_source_line(source_lines, node.lineno)
-            target = ast.dump(node.test) if node.test else ""
             # Try to get a readable target
             target_str = _unparse_safe(node.test)
             expected = ""
@@ -288,12 +288,15 @@ def identify_tested_functions(
             if normalized in patch_file_set and base_name not in seen:
                 seen.add(base_name)
                 # Read the function source
-                from bench_cleanser.code_visitor import extract_function_source as _extract
                 full_path = repo_path / source_file
                 if full_path.exists():
                     try:
                         content = full_path.read_text(encoding="utf-8", errors="replace")
-                        func_source = _extract(content, base_name, max_lines=max_source_lines)
+                        func_source = extract_function_source(
+                            content,
+                            base_name,
+                            max_lines=max_source_lines,
+                        )
                     except OSError:
                         func_source = ""
                 else:
@@ -329,8 +332,11 @@ def identify_tested_functions(
                 )
                 if pattern.search(content):
                     seen.add(base_name)
-                    from bench_cleanser.code_visitor import extract_function_source as _extract
-                    func_source = _extract(content, base_name, max_lines=max_source_lines)
+                    func_source = extract_function_source(
+                        content,
+                        base_name,
+                        max_lines=max_source_lines,
+                    )
                     results.append(TestedFunction(
                         name=base_name,
                         file_path=pf,

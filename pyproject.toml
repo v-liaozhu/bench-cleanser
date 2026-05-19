@@ -116,3 +116,4 @@ python_version = "3.11"
 warn_redundant_casts = true
 warn_unused_ignores = true
 ignore_missing_imports = true
+exclude = ["bench_cleanser/_internal/cloudgpt.py"]

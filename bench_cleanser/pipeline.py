@@ -170,7 +170,12 @@ def enrich_with_code_context(
                 test_hunk.test_name, len(tested_funcs), len(call_targets), len(assertions),
             )
         except Exception as exc:
-            logger.warning("Code visitation failed for %s: %s", test_hunk.test_name, exc)
+            logger.warning(
+                "Code visitation failed for %s: %s",
+                test_hunk.test_name,
+                exc,
+                exc_info=True,
+            )
 
 
 def _log_code_context(parsed: ParsedTask, instance_id: str) -> None:
@@ -241,7 +246,7 @@ async def process_single_task(
             try:
                 structural_diff = compute_structural_diff(parsed, repo_path)
             except Exception as exc:
-                logger.error("Structural diff failed for %s: %s", iid, exc)
+                logger.error("Structural diff failed for %s: %s", iid, exc, exc_info=True)
     if structural_diff is None:
         logger.warning(
             "No structural context for %s — intent matching will run without "
@@ -339,7 +344,7 @@ async def run_pipeline(
         records = [r for r in records if r.instance_id not in skipped_ids]
 
     semaphore = asyncio.Semaphore(config.concurrency)
-    severity_counts = {"CLEAN": 0, "MINOR": 0, "MODERATE": 0, "SEVERE": 0}
+    severity_counts = {sev.value: 0 for sev in Severity}
 
     try:
         from rich.console import Console
@@ -393,17 +398,6 @@ async def run_pipeline(
             return report
 
     if use_rich:
-        from rich.console import Console
-        from rich.progress import (
-            BarColumn,
-            MofNCompleteColumn,
-            Progress,
-            SpinnerColumn,
-            TaskProgressColumn,
-            TextColumn,
-            TimeElapsedColumn,
-            TimeRemainingColumn,
-        )
         console = Console()
         with Progress(
             SpinnerColumn(),
@@ -425,7 +419,7 @@ async def run_pipeline(
             def _update_progress():
                 elapsed = time.monotonic() - start_time
                 completed = sum(severity_counts.values())
-                rate = completed / elapsed if elapsed > 0 else 0
+                rate_per_min = (completed / elapsed * 60) if elapsed > 0 else 0
                 status_parts = [
                     f"[green]CLEAN:{severity_counts['CLEAN']}[/green]",
                     f"[yellow]MINOR:{severity_counts['MINOR']}[/yellow]",
@@ -434,10 +428,25 @@ async def run_pipeline(
                 ]
                 if error_count:
                     status_parts.append(f"[red bold]ERR:{error_count}[/red bold]")
-                status_parts.append(f"[dim]{rate:.1f}/min[/dim]")
+                status_parts.append(f"[dim]{rate_per_min:.1f}/min[/dim]")
                 progress.update(task_id, advance=1, status=" ".join(status_parts))
             tasks = [_process(record, _update_progress) for record in records]
             reports = list(await asyncio.gather(*tasks))
+
+            if skipped_ids:
+                for report_path in reports_dir.glob("*.json"):
+                    if report_path.stem in skipped_ids:
+                        try:
+                            data = json.loads(report_path.read_text(encoding="utf-8"))
+                            resumed = ContaminationReport.from_dict(data)
+                            reports.append(resumed)
+                            severity_counts[resumed.severity.value] += 1
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to load resumed report %s: %s",
+                                report_path.stem,
+                                exc,
+                            )
 
         # Print final summary table
         final_table = Table(title="Pipeline Complete", show_header=True, header_style="bold")
@@ -464,7 +473,7 @@ async def run_pipeline(
         reports = list(await asyncio.gather(*tasks))
         progress_bar.close()
 
-    if skipped_ids:
+    if skipped_ids and not use_rich:
         for report_path in reports_dir.glob("*.json"):
             if report_path.stem in skipped_ids:
                 try:

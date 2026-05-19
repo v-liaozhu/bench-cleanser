@@ -32,6 +32,9 @@ jobs:
       - name: Lint (ruff)
         run: ruff check bench_cleanser tests
 
+      - name: Type check (mypy)
+        run: mypy bench_cleanser
+
       - name: Tests (pytest)
         env:
           # Tests must not reach out to the network or to Azure.

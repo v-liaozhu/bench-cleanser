@@ -1,5 +1,7 @@
 """Tests for bench_cleanser.llm_client JSON extraction and cache key determinism."""
 
+import pytest
+
 from bench_cleanser.llm_client import LLMClient
 
 
@@ -25,13 +27,13 @@ class TestExtractJson:
         result = LLMClient._extract_json(text)
         assert result == {"verdict": "CLEAN"}
 
-    def test_invalid_returns_empty(self):
-        result = LLMClient._extract_json("not json at all")
-        assert result == {}
+    def test_invalid_raises(self):
+        with pytest.raises(ValueError, match="Failed to parse JSON"):
+            LLMClient._extract_json("not json at all")
 
-    def test_empty_string(self):
-        result = LLMClient._extract_json("")
-        assert result == {}
+    def test_empty_string_raises(self):
+        with pytest.raises(ValueError, match="Failed to parse JSON"):
+            LLMClient._extract_json("")
 
     def test_nested_json(self):
         text = '{"outer": {"inner": [1, 2, 3]}, "flag": true}'

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from datasets import load_dataset
 
 from bench_cleanser.models import TaskRecord
+
+logger = logging.getLogger(__name__)
 
 
 def _load_dataset_as_records(
@@ -103,6 +107,14 @@ def load_single_task(instance_id: str) -> TaskRecord | None:
             for row in ds:
                 if row.get("instance_id") == instance_id:
                     return TaskRecord.from_dict(row)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Failed loading dataset %s (%s) while searching for %s: %s",
+                name,
+                split,
+                instance_id,
+                exc,
+                exc_info=True,
+            )
             continue
     return None

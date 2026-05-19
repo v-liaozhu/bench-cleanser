@@ -211,7 +211,7 @@ ORDER BY ar.created_at ASC"""
     except ImportError:
         use_rich = False
 
-    records = []
+    records: list[TrajectoryRecord] = []
 
     def _fetch_and_parse(row, progress=None, task_id=None):
         run_id = row.get("agent_run_id", "")

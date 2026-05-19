@@ -47,6 +47,8 @@ class CrossReferenceResult:
         return len(self.couplings) > 0
 
 
+_IDENTIFIER_OVERLAP_THRESHOLD = 3
+
 _COMMON_IDENTIFIERS = frozenset({
     "test", "self", "assert", "True", "False", "None", "return",
     "import", "from", "class", "def", "for", "while", "with",
@@ -167,7 +169,7 @@ def analyze_cross_references(
             test_ids = _extract_identifiers(test_text)
             for hunk_idx, hunk_ids in oos_identifiers.items():
                 overlap = test_ids & hunk_ids
-                if len(overlap) >= 3:  # Require 3+ non-common overlapping identifiers
+                if len(overlap) >= _IDENTIFIER_OVERLAP_THRESHOLD:
                     linked_indices.add(hunk_idx)
 
         if linked_indices:
