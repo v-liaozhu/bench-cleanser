@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: pytest + ruff (Python ${{ matrix.python-version }})
+    name: pytest + ruff + mypy (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -35,9 +35,9 @@ jobs:
       - name: Type check (mypy)
         run: mypy bench_cleanser
 
-      - name: Tests (pytest)
-        env:
-          # Tests must not reach out to the network or to Azure.
-          # Any test that needs the LLM uses tests.conftest.FakeLLMClient.
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "0"
+      - name: Tests (pytest, offline only)
+        # No network is reachable from CI tests; any test that exercises the
+        # LLM uses tests.conftest.FakeLLMClient. We do NOT set
+        # PYTEST_DISABLE_PLUGIN_AUTOLOAD — pytest-asyncio is loaded via the
+        # standard entry-point mechanism (see pyproject.toml dev extras).
         run: pytest tests/ -q --tb=short

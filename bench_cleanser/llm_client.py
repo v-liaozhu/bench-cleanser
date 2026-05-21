@@ -65,6 +65,13 @@ except ImportError:
 
 _RETRYABLE_ERRORS: tuple[type[BaseException], ...] = tuple(_RETRYABLE_ERRORS_LIST)
 
+# Hard caps for the spare-no-cost retry policy. Per-call backoff is bounded
+# by ``_RETRY_MAX_BACKOFF_SECONDS``; the total wall-clock budget across all
+# retries is bounded by ``_RETRY_MAX_ELAPSED_SECONDS`` so a hung upstream
+# can never block the pipeline indefinitely.
+_RETRY_MAX_BACKOFF_SECONDS: float = 60.0
+_RETRY_MAX_ELAPSED_SECONDS: float = 600.0
+
 
 def _create_async_client(
     config: PipelineConfig,
@@ -159,8 +166,18 @@ class LLMClient:
     ) -> str:
         """Execute a single chat-completion request with retries.
 
-        Returns the assistant content string.  Raises ``RuntimeError``
-        after all retries are exhausted.
+        Spare-no-cost retry policy:
+
+        * unified handling for every error in ``_RETRYABLE_ERRORS``
+        * exponential backoff with deterministic jitter derived from the
+          attempt index (no ``random`` — reproducibility matters)
+        * on ``AuthenticationError`` the cached Azure AD token is dropped
+          so the next attempt reacquires a fresh one
+        * hard caps on total attempts AND total elapsed time so a hung
+          upstream never blocks the pipeline indefinitely
+
+        Returns the assistant content string. Raises :class:`RuntimeError`
+        after the retry budget is exhausted.
         """
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system_prompt},
@@ -178,51 +195,51 @@ class LLMClient:
             kwargs["response_format"] = response_format
 
         last_exc: BaseException | None = None
-        attempt = 0
-        while True:
-            attempt += 1
+        deadline = asyncio.get_event_loop().time() + _RETRY_MAX_ELAPSED_SECONDS
+
+        for attempt in range(1, self._retry_attempts + 1):
             try:
                 response = await self._client.chat.completions.create(**kwargs)
-                content = response.choices[0].message.content or ""
-                return content
-            except APIConnectionError as exc:
-                last_exc = exc
-                if attempt >= self._retry_attempts:
-                    break
-                delay = min(self._retry_delay * (2 ** (attempt - 1)), 60.0)
-                logger.warning(
-                    "LLM connectivity error (attempt %d/%d): %s – retrying in %.1fs",
-                    attempt,
-                    self._retry_attempts,
-                    exc,
-                    delay,
-                )
-                await asyncio.sleep(delay)
-                continue
+                return response.choices[0].message.content or ""
             except _RETRYABLE_ERRORS as exc:
                 last_exc = exc
-                # On 401, invalidate the cached token so the next retry
-                # acquires a fresh one from az CLI.
                 if isinstance(exc, AuthenticationError):
                     self._invalidate_token()
+
                 if attempt >= self._retry_attempts:
                     break
-                delay = min(self._retry_delay * (2 ** (attempt - 1)), 60.0)
+
+                # Deterministic backoff: base * 2^(attempt-1), capped, with a
+                # small attempt-derived jitter so concurrent workers don't
+                # synchronise their retries.
+                base = self._retry_delay * (2 ** (attempt - 1))
+                jitter = (attempt % 4) * 0.25 * self._retry_delay
+                delay = min(base + jitter, _RETRY_MAX_BACKOFF_SECONDS)
+
+                now = asyncio.get_event_loop().time()
+                if now + delay > deadline:
+                    logger.error(
+                        "LLM retry budget exhausted (%.0fs elapsed cap) after attempt %d/%d: %s",
+                        _RETRY_MAX_ELAPSED_SECONDS, attempt, self._retry_attempts, exc,
+                    )
+                    break
+
                 logger.warning(
-                    "LLM request failed (attempt %d/%d): %s – retrying in %.1fs",
-                    attempt,
-                    self._retry_attempts,
-                    exc,
-                    delay,
+                    "LLM request failed (attempt %d/%d, %s): %s — retrying in %.1fs",
+                    attempt, self._retry_attempts, type(exc).__name__, exc, delay,
                 )
                 await asyncio.sleep(delay)
             except Exception as exc:  # noqa: BLE001
-                logger.error("LLM request failed with non-retryable error: %s", exc)
+                logger.error(
+                    "LLM request failed with non-retryable error (%s): %s",
+                    type(exc).__name__, exc,
+                )
                 raise
 
         raise RuntimeError(
             f"LLM request failed after {self._retry_attempts} attempts. "
-            f"Last error: {last_exc}"
+            f"Last error ({type(last_exc).__name__ if last_exc else 'unknown'}): "
+            f"{last_exc}"
         )
 
     @staticmethod
@@ -415,6 +432,7 @@ class LLMClient:
 
         max_validation_attempts = 2
         last_error: Exception | None = None
+        last_payload: str = ""
 
         for attempt in range(1, max_validation_attempts + 1):
             result = await self._call_api(
@@ -435,6 +453,7 @@ class LLMClient:
                 return response_model.model_validate_json(result)
             except ValidationError as exc:
                 last_error = exc
+                last_payload = result
                 logger.warning(
                     "Schema validation failed for %s (attempt %d/%d): %s",
                     response_model.__name__, attempt, max_validation_attempts, exc,
@@ -445,7 +464,8 @@ class LLMClient:
 
         raise RuntimeError(
             f"Schema validation failed for {response_model.__name__} "
-            f"after {max_validation_attempts} attempts: {last_error}"
+            f"after {max_validation_attempts} attempts: {last_error}\n"
+            f"Last payload prefix: {last_payload[:400]!r}"
         )
 
     # ------------------------------------------------------------------

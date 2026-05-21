@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Any
 
+from bench_cleanser.fusion import FusionVerdict, fuse
 from bench_cleanser.models import ContaminationReport, TaskRecord
 from bench_cleanser.trajectory.classifier import (
     classify_cross_agent,
@@ -473,9 +474,6 @@ async def run_trajectory_analysis(
             )
 
     # Stage 7 — Task-Trajectory Fusion summary.
-    from collections import Counter
-
-    from bench_cleanser.fusion import FusionVerdict, fuse
     fusion_counter: Counter[str] = Counter()
     per_agent_counter: dict[str, Counter[str]] = defaultdict(Counter)
     invalidated = 0
@@ -514,11 +512,9 @@ async def run_trajectory_analysis(
         out.write_text(summary, encoding="utf-8")
         logger.info("Trajectory analysis written to %s", out)
 
-    if output_path:
         json_path = pathlib.Path(output_path).with_suffix(".json")
 
         # Stage 7 fusion: combine Axis 1 (task severity) with Axis 2 (trajectory label).
-        from bench_cleanser.fusion import fuse
         fusions: list[dict] = []
         for a in analyses:
             rep = contamination_reports.get(a.instance_id)

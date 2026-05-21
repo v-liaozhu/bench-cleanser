@@ -80,6 +80,11 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 filterwarnings = [
     "ignore::DeprecationWarning",
+    # bench_cleanser.models declares Test* dataclasses (TestVerdict,
+    # TestAnalysis, TestedFunction, …) that are domain entities, not pytest
+    # classes. Suppress the resulting collection warnings rather than
+    # renaming a public API.
+    "ignore::pytest.PytestCollectionWarning",
 ]
 
 [tool.ruff]
