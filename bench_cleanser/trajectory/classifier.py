@@ -40,7 +40,6 @@ from bench_cleanser.trajectory.models import (
 
 logger = logging.getLogger(__name__)
 
-# Thresholds
 GOLD_PATCH_SIMILARITY_THRESHOLD = 0.90
 HIGH_SIMILARITY_THRESHOLD = 0.80
 PIP_INSTALL_RE = re.compile(
@@ -68,24 +67,15 @@ def compute_patch_similarity(patch_a: str, patch_b: str) -> float:
         result = []
         for raw_line in patch.strip().splitlines():
             line = raw_line.rstrip()
-            # Skip diff headers and context lines
-            if line.startswith("diff ") or line.startswith("index "):
+            if line.startswith(("diff ", "index ", "---", "+++", "@@")):
                 continue
-            if line.startswith("---") or line.startswith("+++"):
-                continue
-            if line.startswith("@@"):
-                continue
-            # Only keep added/removed lines
             if line.startswith("+") or line.startswith("-"):
-                # Strip the +/- prefix
                 content = line[1:]
-                # Strip inline comments for Python/JS/Go
-                # (simple heuristic: remove # comments at end of line)
+                # Simple heuristic: strip trailing `#`/`//` comments before
+                # comparing so a commented-out tweak doesn't perturb similarity.
                 content = re.sub(r'\s*#\s.*$', '', content)
                 content = re.sub(r'\s*//\s.*$', '', content)
-                # Normalize whitespace
                 content = ' '.join(content.split())
-                # Skip blank lines after normalization
                 if content:
                     result.append(content)
         return result

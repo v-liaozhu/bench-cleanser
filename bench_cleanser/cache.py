@@ -25,19 +25,11 @@ class ResponseCache:
         self._cache_dir = pathlib.Path(cache_dir)
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # ------------------------------------------------------------------
-    # Public helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def make_key(system_prompt: str, user_prompt: str, model: str) -> str:
         """Return a SHA-256 hex digest for the given prompt/model tuple."""
         content = system_prompt + user_prompt + model
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
-
-    # ------------------------------------------------------------------
-    # Core API
-    # ------------------------------------------------------------------
 
     def _key_path(self, key: str) -> pathlib.Path:
         """Return the file path for *key*."""

@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 600" font-family="ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" role="img" aria-label="bench-cleanser Stage 7 fusion verdict matrix">
+  <title>Stage 7 fusion verdict matrix</title>
+  <desc>Eight fairness verdicts produced by combining task severity (rows) with agent trajectory label (columns). Verdicts that invalidate the measurement are marked with a red border.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0b1020"/>
+      <stop offset="100%" stop-color="#11172e"/>
+    </linearGradient>
+    <style>
+      .title { font-size: 22px; font-weight: 800; fill: #f5f7ff; }
+      .subtitle { font-size: 12px; fill: #9aa6c9; }
+      .head { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; fill: #c5cce0; text-anchor: middle; }
+      .rowhead { font-size: 12px; font-weight: 700; fill: #e7ecff; }
+      .cell-verdict { font-size: 12px; font-weight: 700; fill: #ffffff; text-anchor: middle; }
+      .cell-rule    { font-size: 10px; fill: #d0d7ee; text-anchor: middle; }
+      .legend       { font-size: 11px; fill: #b5bdd8; }
+    </style>
+  </defs>
+  <rect width="1280" height="600" fill="url(#bg)"/>
+
+  <text x="32" y="44" class="title">Stage 7 — fairness verdict matrix</text>
+  <text x="32" y="64" class="subtitle">Rows: task severity (Axis 1, deterministic). Columns: agent trajectory label (Axis 2). Red border = invalidates_measurement.</text>
+
+  <!-- column headers -->
+  <g transform="translate(220,96)">
+    <text x="80"  y="20" class="head">passed_genuine</text>
+    <text x="240" y="20" class="head">passed_leak / test_aware /</text>
+    <text x="240" y="34" class="head">package_leak / trained_hack</text>
+    <text x="400" y="20" class="head">failed_completed_intent</text>
+    <text x="560" y="20" class="head">failed_no_intent</text>
+    <text x="720" y="20" class="head">unknown · resolved=T</text>
+    <text x="880" y="20" class="head">unknown · resolved=F</text>
+  </g>
+
+  <!-- row headers -->
+  <g transform="translate(40,170)">
+    <text x="0" y="32"  class="rowhead">CLEAN</text>
+    <text x="0" y="112" class="rowhead">MINOR</text>
+    <text x="0" y="192" class="rowhead">MODERATE</text>
+    <text x="0" y="272" class="rowhead">SEVERE</text>
+    <text x="0" y="352" class="rowhead">— · APPROACH_LOCK</text>
+    <text x="0" y="366" class="rowhead">— · OVER_TEST</text>
+  </g>
+
+  <!-- cells: x = col*160 + 220, y = row*80 + 144 -->
+  <g font-family="inherit">
+    <!-- helper colours -->
+    <!-- CLEAN row -->
+    <g transform="translate(220,144)">
+      <rect width="156" height="64" rx="8" fill="#1c4a36" stroke="#2d6a4f"/>
+      <text x="78" y="28" class="cell-verdict">FAIR_PASS</text>
+      <text x="78" y="48" class="cell-rule">Rule 3</text>
+    </g>
+    <g transform="translate(380,144)">
+      <rect width="156" height="64" rx="8" fill="#5a1a25" stroke="#ff6b6b" stroke-width="2"/>
+      <text x="78" y="28" class="cell-verdict">AGENT_CHEATED</text>
+      <text x="78" y="48" class="cell-rule">Rule 1 — leak dominates</text>
+    </g>
+    <g transform="translate(540,144)">
+      <rect width="156" height="64" rx="8" fill="#1c4a36" stroke="#2d6a4f"/>
+      <text x="78" y="28" class="cell-verdict">FAIR_FAILURE</text>
+      <text x="78" y="48" class="cell-rule">Rule 6</text>
+    </g>
+    <g transform="translate(700,144)">
+      <rect width="156" height="64" rx="8" fill="#3d3a1a" stroke="#bda44a"/>
+      <text x="78" y="28" class="cell-verdict">AGENT_DISENGAGED</text>
+      <text x="78" y="48" class="cell-rule">Rule 7</text>
+    </g>
+    <g transform="translate(860,144)">
+      <rect width="156" height="64" rx="8" fill="#2a335a" stroke="#3a4a85"/>
+      <text x="78" y="28" class="cell-verdict">AMBIGUOUS_PASS</text>
+      <text x="78" y="48" class="cell-rule">Rule 4 — needs review</text>
+    </g>
+    <g transform="translate(1020,144)">
+      <rect width="156" height="64" rx="8" fill="#22335a" stroke="#3a4a85"/>
+      <text x="78" y="28" class="cell-verdict">INCONCLUSIVE</text>
+      <text x="78" y="48" class="cell-rule">Rule 4 · 8</text>
+    </g>
+
+    <!-- MINOR row -->
+    <g transform="translate(220,224)">
+      <rect width="156" height="64" rx="8" fill="#1c4a36" stroke="#2d6a4f"/>
+      <text x="78" y="28" class="cell-verdict">FAIR_PASS</text>
+      <text x="78" y="48" class="cell-rule">Rule 3</text>
+    </g>
+    <g transform="translate(380,224)">
+      <rect width="156" height="64" rx="8" fill="#5a1a25" stroke="#ff6b6b" stroke-width="2"/>
+      <text x="78" y="28" class="cell-verdict">AGENT_CHEATED</text>
+      <text x="78" y="48" class="cell-rule">Rule 1</text>
+    </g>
+    <g transform="translate(540,224)">
+      <rect width="156" height="64" rx="8" fill="#1c4a36" stroke="#2d6a4f"/>
+      <text x="78" y="28" class="cell-verdict">FAIR_FAILURE</text>
+      <text x="78" y="48" class="cell-rule">Rule 6</text>
+    </g>
+    <g transform="translate(700,224)">
+      <rect width="156" height="64" rx="8" fill="#3d3a1a" stroke="#bda44a"/>
+      <text x="78" y="28" class="cell-verdict">AGENT_DISENGAGED</text>
+      <text x="78" y="48" class="cell-rule">Rule 7</text>
+    </g>
+    <g transform="translate(860,224)">
+      <rect width="156" height="64" rx="8" fill="#22335a" stroke="#3a4a85"/>
+      <text x="78" y="28" class="cell-verdict">INCONCLUSIVE</text>
+      <text x="78" y="48" class="cell-rule">Rule 4</text>
+    </g>
+    <g transform="translate(1020,224)">
+      <rect width="156" height="64" rx="8" fill="#22335a" stroke="#3a4a85"/>
+      <text x="78" y="28" class="cell-verdict">INCONCLUSIVE</text>
+      <text x="78" y="48" class="cell-rule">Rule 4 · 8</text>
+    </g>
+
+    <!-- MODERATE row -->
+    <g transform="translate(220,304)">
+      <rect width="156" height="64" rx="8" fill="#5a3a1a" stroke="#ff6b6b" stroke-width="2"/>
+      <text x="78" y="28" class="cell-verdict">CONTAMINATED_PASS</text>
+      <text x="78" y="48" class="cell-rule">Rule 2 — task broken</text>
+    </g>
+    <g transform="translate(380,304)">
+      <rect width="156" height="64" rx="8" fill="#5a1a25" stroke="#ff6b6b" stroke-width="2"/>
+      <text x="78" y="28" class="cell-verdict">AGENT_CHEATED</text>
+      <text x="78" y="48" class="cell-rule">Rule 1</text>
+    </g>
+    <g transform="translate(540,304)">
+      <rect width="156" height="64" rx="8" fill="#1c4a36" stroke="#2d6a4f"/>
+      <text x="78" y="28" class="cell-verdict">FAIR_FAILURE</text>
+      <text x="78" y="48" class="cell-rule">Rule 6 (no AL/OT)</text>
+    </g>
+    <g transform="translate(700,304)">
+      <rect width="156" height="64" rx="8" fill="#3d3a1a" stroke="#bda44a"/>
+      <text x="78" y="28" class="cell-verdict">AGENT_DISENGAGED</text>
+      <text x="78" y="48" class="cell-rule">Rule 7</text>
+    </g>
+    <g transform="translate(860,304)">
+      <rect width="156" height="64" rx="8" fill="#22335a" stroke="#3a4a85"/>
+      <text x="78" y="28" class="cell-verdict">INCONCLUSIVE</text>
+      <text x="78" y="48" class="cell-rule">Rule 4</text>
+    </g>
+    <g transform="translate(1020,304)">
+      <rect width="156" height="64" rx="8" fill="#22335a" stroke="#3a4a85"/>
+      <text x="78" y="28" class="cell-verdict">INCONCLUSIVE</text>
+      <text x="78" y="48" class="cell-rule">Rule 4 · 8</text>
+    </g>
+
+    <!-- SEVERE row -->
+    <g transform="translate(220,384)">
+      <rect width="156" height="64" rx="8" fill="#5a3a1a" stroke="#ff6b6b" stroke-width="2"/>
+      <text x="78" y="28" class="cell-verdict">CONTAMINATED_PASS</text>
+      <text x="78" y="48" class="cell-rule">Rule 2</text>
+    </g>
+    <g transform="translate(380,384)">
+      <rect width="156" height="64" rx="8" fill="#5a1a25" stroke="#ff6b6b" stroke-width="2"/>
+      <text x="78" y="28" class="cell-verdict">AGENT_CHEATED</text>
+      <text x="78" y="48" class="cell-rule">Rule 1</text>
+    </g>
+    <g transform="translate(540,384)">
+      <rect width="156" height="64" rx="8" fill="#5a1a25" stroke="#ff6b6b" stroke-width="2"/>
+      <text x="78" y="28" class="cell-verdict">UNFAIR_FAILURE</text>
+      <text x="78" y="48" class="cell-rule">Rule 5 — task lock + failure</text>
+    </g>
+    <g transform="translate(700,384)">
+      <rect width="156" height="64" rx="8" fill="#3d3a1a" stroke="#bda44a"/>
+      <text x="78" y="28" class="cell-verdict">AGENT_DISENGAGED</text>
+      <text x="78" y="48" class="cell-rule">Rule 7</text>
+    </g>
+    <g transform="translate(860,384)">
+      <rect width="156" height="64" rx="8" fill="#22335a" stroke="#3a4a85"/>
+      <text x="78" y="28" class="cell-verdict">INCONCLUSIVE</text>
+      <text x="78" y="48" class="cell-rule">Rule 4</text>
+    </g>
+    <g transform="translate(1020,384)">
+      <rect width="156" height="64" rx="8" fill="#22335a" stroke="#3a4a85"/>
+      <text x="78" y="28" class="cell-verdict">INCONCLUSIVE</text>
+      <text x="78" y="48" class="cell-rule">Rule 4 · 8</text>
+    </g>
+  </g>
+
+  <!-- legend -->
+  <g transform="translate(40,496)">
+    <rect width="14" height="14" rx="3" fill="#1c4a36" stroke="#2d6a4f"/>
+    <text x="22" y="12" class="legend">fair — counts toward agent capability</text>
+
+    <rect x="280" width="14" height="14" rx="3" fill="#5a1a25" stroke="#ff6b6b" stroke-width="2"/>
+    <text x="302" y="12" class="legend">invalidates_measurement — drop from leaderboard</text>
+
+    <rect x="640" width="14" height="14" rx="3" fill="#5a3a1a" stroke="#ff6b6b" stroke-width="2"/>
+    <text x="662" y="12" class="legend">task-side invalidation (benchmark needs fix)</text>
+
+    <rect x="990" width="14" height="14" rx="3" fill="#22335a" stroke="#3a4a85"/>
+    <text x="1012" y="12" class="legend">manual review · inconclusive</text>
+  </g>
+  <g transform="translate(40,520)">
+    <text class="legend" y="12">Rules: top-down, first match wins. Full definitions in docs/FUSION.md. Implementation: bench_cleanser/fusion.py.</text>
+  </g>
+</svg>

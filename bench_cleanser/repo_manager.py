@@ -50,9 +50,7 @@ class RepoManager:
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._timeout = clone_timeout
 
-    # ------------------------------------------------------------------
     # Public API
-    # ------------------------------------------------------------------
 
     def get_repo_path(self, repo: str, base_commit: str) -> pathlib.Path | None:
         """Return the local path for *repo* at *base_commit*, cloning if needed.
@@ -99,9 +97,7 @@ class RepoManager:
                 result[fp] = content
         return result
 
-    # ------------------------------------------------------------------
-    # Batch pre-clone (call before pipeline processing)
-    # ------------------------------------------------------------------
+    # Batch pre-clone — call before pipeline processing.
 
     def pre_clone_repos(
         self,
@@ -142,9 +138,7 @@ class RepoManager:
 
         return results
 
-    # ------------------------------------------------------------------
     # Internal
-    # ------------------------------------------------------------------
 
     def _clone(
         self,

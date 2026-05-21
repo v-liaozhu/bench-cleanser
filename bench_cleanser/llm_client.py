@@ -150,10 +150,6 @@ class LLMClient:
         self._retry_delay = config.retry_delay_seconds
         self._cache = cache
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _cache_key(self, system_prompt: str, user_prompt: str) -> str:
         """Build a deterministic cache key for a prompt pair."""
         return ResponseCache.make_key(system_prompt, user_prompt, self._model)
@@ -277,10 +273,6 @@ class LLMClient:
         logger.error("Failed to parse JSON from LLM response: %.200s", text)
         raise ValueError("Failed to parse JSON from LLM response")
 
-    # ------------------------------------------------------------------
-    # Public async API
-    # ------------------------------------------------------------------
-
     async def query(
         self,
         system_prompt: str,
@@ -302,7 +294,6 @@ class LLMClient:
         """
         key = self._cache_key(system_prompt, user_prompt)
 
-        # Check cache
         if self._cache is not None:
             cached = self._cache.get(key)
             if cached is not None:
@@ -314,7 +305,6 @@ class LLMClient:
         )
         result = await self._call_api(system_prompt, user_prompt, response_format=fmt)
 
-        # Store in cache
         if self._cache is not None and result:
             self._cache.put(key, result, model=self._model)
 
@@ -344,14 +334,12 @@ class LLMClient:
         """
         key = self._cache_key(system_prompt, user_prompt)
 
-        # Check cache
         if not skip_cache and self._cache is not None:
             cached = self._cache.get(key)
             if cached is not None:
                 logger.debug("Cache hit for key %s", key[:12])
                 return self._extract_json(cached)
 
-        # Try with native JSON mode first.
         result = await self._call_api(
             system_prompt,
             user_prompt,
@@ -359,11 +347,11 @@ class LLMClient:
         )
 
         if not result:
-            # Fallback: inject instruction into the system prompt.
+            # Some models silently drop json_object mode; nudge them with an
+            # explicit instruction injected into the system prompt.
             fallback_system = system_prompt.rstrip() + "\n\nRespond in valid JSON."
             result = await self._call_api(fallback_system, user_prompt)
 
-        # Store in cache
         if self._cache is not None and result:
             self._cache.put(key, result, model=self._model)
 
@@ -445,7 +433,8 @@ class LLMClient:
                     f"LLM returned empty response for {response_model.__name__}"
                 )
 
-            # Store in cache (raw response) before validation
+            # Cache the raw payload BEFORE validation so a partially
+            # corrupted response is still inspectable without re-billing.
             if self._cache is not None:
                 self._cache.put(key, result, model=self._model)
 
@@ -467,10 +456,6 @@ class LLMClient:
             f"after {max_validation_attempts} attempts: {last_error}\n"
             f"Last payload prefix: {last_payload[:400]!r}"
         )
-
-    # ------------------------------------------------------------------
-    # Synchronous convenience wrappers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _run_sync(coro: Any) -> Any:
