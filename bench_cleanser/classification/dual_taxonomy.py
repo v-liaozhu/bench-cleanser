@@ -37,6 +37,10 @@ from bench_cleanser.schemas import TaskClassificationResponse
 logger = logging.getLogger(__name__)
 
 
+# Canonical, human-readable definitions for the seven Axis-1 task labels.
+# Not consumed at runtime — the live prompts live in bench_cleanser/prompts.
+# Kept as the single source of truth that the prompts and docs must agree with,
+# and as a cross-walk to the OpenAI SWE-bench Verified audit categories.
 LABEL_DEFINITIONS: dict[str, dict[str, Any]] = {
     "approach_lock": {
         "display": "Approach Lock",

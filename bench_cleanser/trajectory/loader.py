@@ -138,6 +138,7 @@ def load_from_docent(
     collection_id: str,
     api_key: str,
     server_url: str = "https://api.docent.transluce.org",
+    frontend_url: str = "https://docent.transluce.org",
     instance_ids: set[str] | None = None,
     model_name: str | None = None,
     dql_query: str | None = None,
@@ -150,7 +151,11 @@ def load_from_docent(
     Args:
         collection_id: Docent collection UUID.
         api_key: Docent API key.
-        server_url: Docent API server URL.
+        server_url: Docent API server URL. The SDK appends ``/rest``
+            internally — pass the bare API root, not the REST suffix.
+        frontend_url: Docent frontend URL. Recent SDK versions warn
+            (and will eventually error) when only one of api_url /
+            frontend_url is supplied, so we pass both explicitly.
         instance_ids: Only include these instance IDs.
         model_name: Filter by model name in DQL query.
         dql_query: Custom DQL query (overrides default).
@@ -161,7 +166,11 @@ def load_from_docent(
         logger.error("docent-python library required for Docent loading. pip install docent-python")
         return []
 
-    client = Docent(api_key=api_key, api_url=server_url + "/rest")
+    client = Docent(
+        api_key=api_key,
+        api_url=server_url,
+        frontend_url=frontend_url,
+    )
 
     if dql_query is None:
         # Build default DQL query
