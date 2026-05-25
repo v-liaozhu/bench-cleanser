@@ -11,7 +11,7 @@
   <a href="https://www.python.org/downloads/"><img alt="Python 3.11 | 3.12" src="https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2ea44f"></a>
   <img alt="Status: 1.0.0 — production stable" src="https://img.shields.io/badge/status-1.0.0%20stable-1f6feb">
-  <img alt="Coverage: 96 offline tests" src="https://img.shields.io/badge/tests-96%20offline-2da44e">
+  <img alt="Coverage: 116 offline tests" src="https://img.shields.io/badge/tests-116%20offline-2da44e">
 </p>
 
 <p>
@@ -331,7 +331,7 @@ If you bring your own trajectory schema, implement a loader that returns `list[T
 
 Loading is centralised in `bench_cleanser.data_loader`, which exposes `load_swebench_verified`, `load_swebench_pro`, `load_swebench_live`, `load_all`, and `load_single_task`. The taxonomy and the severity rules are deliberately benchmark-agnostic — what changes between the three datasets is which input fields are populated, not which labels can be assigned.
 
-For the precise contamination patterns observed in the wild (task/patch mismatch; pre-staged tests via `before_repo_set_cmd`; compilation-barrier coupling in monolithic builds; mechanical test mutations) see [`audits/severe/AUDIT_PROTOCOL.md`](audits/severe/AUDIT_PROTOCOL.md) — the human-review protocol that informed the v1.0.0 rules.
+For the precise contamination patterns observed in the wild (task/patch mismatch; pre-staged tests via `before_repo_set_cmd`; compilation-barrier coupling in monolithic builds; mechanical test mutations) the v1.0.0 rules are informed by a human-review protocol over the SWE-bench Pro severe-case audit. The protocol artefacts live outside the repo because they are large and per-dataset; the rules they distilled are encoded in `bench_cleanser/classification/dual_taxonomy.py` and `bench_cleanser/fusion.py`.
 
 ---
 
@@ -374,7 +374,7 @@ The package is **importable, scriptable, and embeddable**. There are no `sys.pat
 - **Console scripts, not bash entry points.** `pyproject.toml [project.scripts]` declares three entry points. Once the package is installed they live on `PATH` regardless of how the user installed Python.
 - **Soft dependencies degrade gracefully.** Missing `docent-python` → Docent loader logs and returns `[]`. Missing `astred-core` → structural diff falls back to stdlib `ast` with the same downstream interface.
 - **OS-portable line endings.** `.gitattributes` normalises text files to LF and keeps Windows-native artefacts (`.bat`, `.ps1`) on CRLF; the repo round-trips cleanly between WSL, Linux CI, and Windows checkouts.
-- **No network, no Azure, no git in tests.** The 96-test suite is fully offline. Anything that would otherwise touch a remote service is replaced by an in-test fake; `pytest tests/` works on an airplane.
+- **No network, no Azure, no git in tests.** The 116-test suite is fully offline. Anything that would otherwise touch a remote service is replaced by an in-test fake; `pytest tests/` works on an airplane.
 
 ---
 
@@ -406,7 +406,7 @@ mypy bench_cleanser
 pytest tests/ -q
 ```
 
-Continuous integration (`.github/workflows/ci.yml`) executes the same three gates on Python **3.11** and **3.12** for every push and PR. The current suite is **96 tests** covering:
+Continuous integration (`.github/workflows/ci.yml`) executes the same three gates on Python **3.11** and **3.12** for every push and PR. The current suite is **116 tests** covering:
 
 - Patch parsing, diff normalisation, similarity scoring.
 - Dual-taxonomy heuristics — every Axis-1 label has at least one positive and one negative regression test.
@@ -448,10 +448,8 @@ docs/
 ├── CONTRIBUTING.md           dev workflow, extension checklists, code style
 └── assets/                   architecture.svg, fusion_matrix.svg
 
-tests/                        96 offline tests, no network, no Azure, no git clones
+tests/                        116 offline tests, no network, no Azure, no git clones
 examples/sample_run/          three representative ContaminationReport JSONs (CLEAN / MINOR / labelled)
-audits/severe/                AUDIT_PROTOCOL.md — human-review methodology that informed v1.0.0
-case_studies/                 forensic write-ups of representative contamination cases
 .github/workflows/ci.yml      ruff + mypy + pytest on 3.11 & 3.12
 .gitattributes                LF defaults, CRLF for .bat / .ps1
 ```
@@ -468,7 +466,7 @@ Generated outputs (`output/`, `.cache/`, ad-hoc audit / slides directories) are 
 - It does not detect every form of reward hacking — only those that surface in patch, test, or trajectory signals.
 - `CLEAN` is **not** "perfect benchmark item." `CLEAN` is "no contamination signal on the seven Axis-1 labels" — a row that is `CLEAN` may still be flaky, ill-typed, or upstream of an issue the tool doesn't measure.
 - The Axis-1 labels are produced with LLM assistance and inherit its judgement noise. The deterministic stages (severity, fusion) only amplify what the upstream labels say.
-- Cross-reference coupling uses file-level matching, not function-level — false positives are possible in monorepos where tests import a shared module but only consume a small slice. This is a known gap, documented in `audits/severe/AUDIT_PROTOCOL.md § Known Pipeline Gaps`.
+- Cross-reference coupling uses file-level matching, not function-level — false positives are possible in monorepos where tests import a shared module but only consume a small slice. This is a known gap.
 
 If you need a guarantee that a benchmark row is sound, you still need human review. `bench-cleanser` makes that review tractable — it does not replace it.
 
@@ -503,7 +501,7 @@ Directly related work:
 - [`docs/TAXONOMY.md`](docs/TAXONOMY.md) — Axis-1 / Axis-2 labels, evidence rules, severity mapping.
 - [`docs/FUSION.md`](docs/FUSION.md) — Stage-7 rule matrix and worked examples.
 - [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — Dev workflow, label / verdict extension checklists, code style.
-- [`audits/severe/AUDIT_PROTOCOL.md`](audits/severe/AUDIT_PROTOCOL.md) — Human-review protocol; documents the contamination patterns observed in the SWE-bench Pro severe-case audit.
+- [`docs/overview.html`](docs/overview.html) — 12-slide reveal.js project overview (open in any browser).
 - [`CHANGELOG.md`](CHANGELOG.md) — Release history.
 
 ---

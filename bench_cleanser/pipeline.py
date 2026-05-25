@@ -491,7 +491,6 @@ async def run_pipeline(
                                 exc,
                             )
 
-        # Print final summary table
         final_table = Table(title="Pipeline Complete", show_header=True, header_style="bold")
         final_table.add_column("Metric", style="bold")
         final_table.add_column("Value", justify="right")

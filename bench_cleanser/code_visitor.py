@@ -52,10 +52,6 @@ def extract_function_source(
     return ""
 
 
-# -------------------------------------------------------------------
-# Full test source retrieval
-# -------------------------------------------------------------------
-
 def get_full_test_source(
     repo_path: pathlib.Path,
     test_file: str,
@@ -94,7 +90,6 @@ def get_post_patch_test_source(
     Falls back to reconstructing from added_lines if needed.
     """
     if not pre_patch_content:
-        # No pre-patch content — just use added lines
         return "\n".join(added_lines)
 
     # For a robust approach: find the function in pre_patch_content,
@@ -171,7 +166,6 @@ def extract_fixtures(
                     if arg.arg not in ("self", "cls"):
                         test_params.add(arg.arg)
 
-    # Find fixture definitions used by the test
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             is_fixture = False
