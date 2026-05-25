@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>bench-cleanser — research instrument for the SWE-bench family</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reset.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css" id="theme">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/monokai.css">
+<style>
+  :root { --accent: #6ad1ff; --warn: #ffb86c; --bad: #ff6b6b; --good: #50fa7b; }
+  .reveal h1, .reveal h2, .reveal h3 { text-transform: none; letter-spacing: -0.02em; }
+  .reveal h1 { font-size: 2.0em; }
+  .reveal h2 { font-size: 1.35em; color: var(--accent); }
+  .reveal h3 { font-size: 1.05em; color: var(--accent); }
+  .reveal section { text-align: left; font-size: 0.78em; line-height: 1.4; }
+  .reveal section.center { text-align: center; }
+  .reveal .small { font-size: 0.75em; opacity: 0.85; }
+  .reveal .tiny { font-size: 0.6em; opacity: 0.7; }
+  .reveal code { color: var(--accent); background: rgba(106,209,255,.08); padding: 0 0.3em; border-radius: 3px; }
+  .reveal pre { box-shadow: none; font-size: 0.55em; line-height: 1.35; }
+  .reveal table { font-size: 0.78em; border-collapse: collapse; margin: 0.5em 0; }
+  .reveal th, .reveal td { padding: 0.25em 0.6em; border-bottom: 1px solid rgba(255,255,255,0.12); vertical-align: top; }
+  .reveal th { color: var(--accent); font-weight: 600; }
+  .reveal .pill { display: inline-block; padding: 0 0.5em; margin: 0 0.2em 0.2em 0; border-radius: 99px; font-size: 0.65em; border: 1px solid rgba(255,255,255,0.25); }
+  .reveal .pill.good { color: var(--good); border-color: var(--good); }
+  .reveal .pill.bad { color: var(--bad); border-color: var(--bad); }
+  .reveal .pill.warn { color: var(--warn); border-color: var(--warn); }
+  .reveal .pill.accent { color: var(--accent); border-color: var(--accent); }
+  .reveal .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2em; }
+  .reveal .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1em; }
+  .reveal .footer { position: absolute; bottom: 12px; right: 24px; font-size: 0.5em; opacity: 0.5; }
+  .reveal .lead { font-size: 1.1em; color: #eee; }
+  .reveal .dim { opacity: 0.7; }
+  .reveal .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .reveal .verdict-matrix td { text-align: center; font-size: 0.7em; }
+  .reveal .verdict-matrix .row-label { text-align: right; color: var(--accent); }
+  .reveal .verdict-matrix .invalidates { color: var(--bad); }
+  .reveal .verdict-matrix .fair { color: var(--good); }
+  .reveal .verdict-matrix .neutral { color: #ddd; }
+</style>
+</head>
+<body>
+<div class="reveal"><div class="slides">
+
+<!-- ────────────────────────── 1. Title ────────────────────────── -->
+<section class="center">
+  <h1>bench-cleanser</h1>
+  <p class="lead">Deterministic contamination, fairness, and trajectory-leakage analysis for the SWE-bench family.</p>
+  <p class="small dim">A research instrument for the people building, training on, and grading agentic coding LLMs.</p>
+  <p>
+    <span class="pill accent">v1.0.0</span>
+    <span class="pill good">116 offline tests</span>
+    <span class="pill good">ruff + mypy clean</span>
+    <span class="pill">Python 3.11 / 3.12</span>
+    <span class="pill">MIT</span>
+  </p>
+  <p class="tiny dim">Liao Zhu · 2026</p>
+</section>
+
+<!-- ────────────────────────── 2. The question ────────────────────────── -->
+<section>
+  <h2>Why this exists</h2>
+  <p>SWE-bench leaderboards answer "did this row pass." They don't answer "was passing this row a real measurement of capability."</p>
+  <p>Two failure modes that look identical on a leaderboard:</p>
+  <table>
+    <tr><th></th><th>Looks like</th><th>Actually is</th></tr>
+    <tr><td class="dim">Task is broken</td><td>Model failed</td><td>Tests demand undescribed behaviour</td></tr>
+    <tr><td class="dim">Agent cheated</td><td>Model passed</td><td>Agent <code>pip install</code>ed the fix</td></tr>
+    <tr><td class="dim">Honest pass</td><td>Model passed</td><td>Model passed</td></tr>
+    <tr><td class="dim">Honest fail</td><td>Model failed</td><td>Model failed</td></tr>
+  </table>
+  <p class="small">A single score conflates all four. <code>bench-cleanser</code> separates them, with citations, before anyone trains on the data or publishes against it.</p>
+</section>
+
+<!-- ────────────────────────── 3. Two-axis model ────────────────────────── -->
+<section>
+  <h2>The two-axis model</h2>
+  <div class="grid2">
+    <div>
+      <h3>Axis 1 — Task contamination</h3>
+      <p class="small">Is the benchmark item itself fair?</p>
+      <ul class="small">
+        <li>Multi-label over 7 binary labels</li>
+        <li>Severity = pure set membership (no thresholds, no floats)</li>
+        <li>Inputs: problem text, gold patch, F2P/P2P tests, repo state</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Axis 2 — Agent trajectory</h3>
+      <p class="small">How did this agent reach its result?</p>
+      <ul class="small">
+        <li>One label per <code>(task, agent)</code></li>
+        <li>Heuristics + LLM, with cross-agent quorum upgrade</li>
+        <li>Inputs: action trace, final patch, <code>resolved</code> flag</li>
+      </ul>
+    </div>
+  </div>
+  <p class="small">An <code>APPROACH_LOCK</code> task is broken whether or not any model attempts it. An agent that <code>pip install</code>s the fix has cheated whether or not the task is clean. <strong>Stage 7</strong> fuses both axes into a single fairness verdict.</p>
+</section>
+
+<!-- ────────────────────────── 4. Axis 1 labels ────────────────────────── -->
+<section>
+  <h2>Axis 1 · labels and severity</h2>
+  <table>
+    <tr><th>Label</th><th>Triggers when…</th><th>Severity</th></tr>
+    <tr><td><code>APPROACH_LOCK</code></td><td>F2P tests assert on a specific implementation, not behaviour.</td><td class="invalidates">SEVERE</td></tr>
+    <tr><td><code>OVER_TEST</code></td><td>F2P tests assert on undescribed behaviour.</td><td class="invalidates">SEVERE</td></tr>
+    <tr><td><code>OVER_PATCH</code></td><td>Gold patch modifies behaviour beyond the problem.</td><td>MINOR / MODERATE</td></tr>
+    <tr><td><code>UNCLEAR_DESCRIPTION</code></td><td>Multiple incompatible solutions are reasonable.</td><td>MINOR</td></tr>
+    <tr><td><code>HIDDEN_CONTEXT</code></td><td>Spec depends on info not in the problem text.</td><td>MINOR</td></tr>
+    <tr><td><code>WEAK_COVERAGE</code></td><td>F2P tests don't exercise patched code paths.</td><td>MINOR</td></tr>
+    <tr><td><code>CLEAN</code></td><td>None of the above.</td><td class="fair">CLEAN</td></tr>
+  </table>
+  <pre><code class="mono small">SEVERE   ≜ APPROACH_LOCK ∈ L  OR  OVER_TEST ∈ L
+MODERATE ≜ OVER_PATCH ∈ L  AND  (HIDDEN_CONTEXT ∈ L  OR  UNCLEAR_DESCRIPTION ∈ L)
+MINOR    ≜ any other non-empty contamination subset
+CLEAN    ≜ L = ∅</code></pre>
+  <p class="tiny dim">Aligned with OpenAI's SWE-bench Verified audit: <code>APPROACH_LOCK</code> ↔ "narrow tests"; <code>OVER_TEST</code> ↔ "wide tests".</p>
+</section>
+
+<!-- ────────────────────────── 5. Axis 2 labels ────────────────────────── -->
+<section>
+  <h2>Axis 2 · per-agent trajectory labels</h2>
+  <table>
+    <tr><th>Outcome</th><th>Label</th><th>Pattern</th></tr>
+    <tr><td rowspan="5" class="dim">Passed</td><td><code>agent_passed_genuine</code></td><td>Explore → hypothesise → patch → test.</td></tr>
+    <tr><td><code>agent_passed_leak</code></td><td>Final patch ≥ 0.90 similar to gold; direct file jumps.</td></tr>
+    <tr><td><code>agent_passed_package_leak</code></td><td>Agent <code>pip install</code>ed the affected package.</td></tr>
+    <tr><td><code>agent_passed_test_aware</code></td><td>Referenced F2P test names before they were derivable.</td></tr>
+    <tr><td><code>agent_passed_trained_hack</code></td><td>Canonical fix on first try — memorised template.</td></tr>
+    <tr><td rowspan="2" class="dim">Failed</td><td><code>agent_failed_completed_intent</code></td><td>Addressed the brief; F2P tests rejected it. → <code>UNFAIR_FAILURE</code> driver.</td></tr>
+    <tr><td><code>agent_failed_no_intent</code></td><td>Never engaged the problem. Skill gap.</td></tr>
+    <tr><td class="dim">Unknown</td><td><code>agent_unknown</code></td><td>Trajectory truncated or malformed.</td></tr>
+  </table>
+</section>
+
+<!-- ────────────────────────── 6. Fusion matrix ────────────────────────── -->
+<section>
+  <h2>Stage 7 · fairness verdict matrix</h2>
+  <table class="verdict-matrix">
+    <tr>
+      <th></th>
+      <th>passed_genuine</th>
+      <th>passed_leak·*</th>
+      <th>failed_completed</th>
+      <th>failed_no_intent</th>
+      <th>unknown</th>
+    </tr>
+    <tr>
+      <td class="row-label">CLEAN / MINOR</td>
+      <td class="fair">FAIR_PASS</td>
+      <td class="invalidates">AGENT_CHEATED</td>
+      <td class="fair">FAIR_FAILURE</td>
+      <td class="neutral">AGENT_DISENGAGED</td>
+      <td class="neutral">AMBIGUOUS_PASS · INCONCLUSIVE</td>
+    </tr>
+    <tr>
+      <td class="row-label">MODERATE / SEVERE</td>
+      <td class="invalidates">CONTAMINATED_PASS</td>
+      <td class="invalidates">AGENT_CHEATED</td>
+      <td class="invalidates">UNFAIR_FAILURE</td>
+      <td class="neutral">AGENT_DISENGAGED</td>
+      <td class="neutral">INCONCLUSIVE</td>
+    </tr>
+  </table>
+  <p class="small"><span class="invalidates">red</span> verdicts set <code>invalidates_measurement=True</code> — the single boolean a downstream consumer uses to drop a row from a leaderboard. Every verdict ships with <code>reasoning</code> and <code>evidence: list[str]</code>.</p>
+  <p class="tiny dim">Deterministic — no LLM call. Reproducible bit-for-bit from the persisted axis labels.</p>
+</section>
+
+<!-- ────────────────────────── 7. Architecture ────────────────────────── -->
+<section>
+  <h2>Architecture · seven stages</h2>
+<pre><code class="mono">Stage 1   parse      diffs from gold patch + test patch              [deterministic]
+Stage 1.5 visit      shallow-clone repo · attach test source · AST    [deterministic]
+Stage 2   intent     LLM extracts core requirement + scope            [LLM]
+Stage 3   structural astred-core / stdlib ast diff                    [deterministic]
+Stage 4A  patch ↔ intent                                              [LLM]
+Stage 4B  test  ↔ intent                                              [LLM]
+Stage 4C  cross-ref  overpatch–overtest coupling                      [deterministic]
+Stage 5   classify   dual-taxonomy LLM, heuristic-protected           [LLM]
+Stage 6   severity   set-membership bucket                            [deterministic]
+─────────────────────────────────────────────────────────────────────────────
+Stage 7   fusion     Axis 1 × Axis 2 → FairnessVerdict                [deterministic]</code></pre>
+  <p class="small">Every LLM stage emits a Pydantic <code>BaseModel</code>; severity, structural diff, cross-ref, and fusion are all deterministic. The package contains <strong>zero</strong> <code>random.*</code> calls.</p>
+</section>
+
+<!-- ────────────────────────── 8. Determinism contract ────────────────────────── -->
+<section>
+  <h2>Determinism contract</h2>
+  <table>
+    <tr><th>Guarantee</th><th>Concretely</th></tr>
+    <tr><td>No floats in severity or fusion</td><td>Severity = set membership; fusion = <code>(severity × labels × traj × resolved) → verdict</code>.</td></tr>
+    <tr><td>No <code>random</code></td><td>LLM backoff jitter is <code>(attempt mod 4) · 0.25 · base</code> — deterministic.</td></tr>
+    <tr><td>Schema-enforced LLM I/O</td><td><code>response_format={"type":"json_schema","strict":true}</code>, with json_object fallback. Cache-before-validate so a corrupt payload stays inspectable.</td></tr>
+    <tr><td>Resumable runs</td><td><code>--resume</code> on by default; reports reloaded from disk are authoritative.</td></tr>
+    <tr><td>Frozen across model upgrades</td><td>Severity rules depend only on label set. Swapping the LLM never changes the severity mapping.</td></tr>
+    <tr><td>Atomic writes</td><td>Per-report JSON uses <code>tempfile + os.replace</code>; an interrupt never leaves half-files for <code>--resume</code> to mis-load.</td></tr>
+    <tr><td>Cite-or-shut-up evidence</td><td>A label without an evidence list is rejected by the classifier.</td></tr>
+  </table>
+</section>
+
+<!-- ────────────────────────── 9. Trajectory infrastructure ────────────────────────── -->
+<section>
+  <h2>Trajectory infrastructure</h2>
+  <p class="small">Axis 2 is where we deliberately invest beyond what a typical contamination tool ships.</p>
+  <table>
+    <tr><th>Source</th><th>Loader</th><th>Notes</th></tr>
+    <tr><td>Docent</td><td><code>load_from_docent</code></td><td>DQL → <code>agent_runs</code>; tool blocks mapped to <code>ActionType</code>.</td></tr>
+    <tr><td>HuggingFace</td><td><code>load_from_huggingface</code></td><td>Normalises SWE-bench agent dataset conventions.</td></tr>
+    <tr><td>JSONL</td><td><code>load_from_jsonl</code></td><td>One trajectory per line; tolerates malformed lines.</td></tr>
+    <tr><td>JSON dir</td><td><code>load_from_json_dir</code></td><td>One file per trajectory.</td></tr>
+  </table>
+  <h3 class="small">Layered classifier</h3>
+  <ol class="small">
+    <li><strong>Heuristics</strong> — normalised diff similarity (quote-aware comment strip), pip-install detection, F2P-name leakage.</li>
+    <li><strong>LLM</strong> — strict-output Pydantic; heuristic signals embedded in prompt.</li>
+    <li><strong>Cross-agent quorum</strong> — median pairwise similarity ≥ 0.85 AND ≥ 10 added lines → upgrade to <code>GOLD_PATCH_LEAK</code>. Outlier-tolerant; honest low-entropy convergence protected.</li>
+  </ol>
+</section>
+
+<!-- ────────────────────────── 10. Robustness investments ────────────────────────── -->
+<section>
+  <h2>What we just hardened</h2>
+  <div class="grid2">
+    <div>
+      <h3>Strict-mode schemas</h3>
+      <p class="small">True <code>json_schema strict:true</code> with a <code>_strictify_schema</code> transformer (drops defaults, forces <code>additionalProperties:false</code>, inlines <code>$defs</code>). API rejects malformed candidates before they reach us.</p>
+    </div>
+    <div>
+      <h3>Error sentinel removed</h3>
+      <p class="small">Pipeline failures no longer masquerade as <code>SEVERE</code>. New <code>pipeline_error</code> field; severity stays <code>CLEAN</code>; Stage-7 fusion skips error rows. Aggregate stats no longer lie.</p>
+    </div>
+    <div>
+      <h3>Concurrency throttled</h3>
+      <p class="small">Trajectory analyzer now respects <code>max_concurrent_requests</code>. Prevents rate-limit storms silently degrading LLM analysis to the heuristic fallback.</p>
+    </div>
+    <div>
+      <h3>Cache stable across pydantic</h3>
+      <p class="small">Structured cache key uses <code>(model_name, schema_version)</code>, not the full schema text. Pydantic upgrades no longer wipe cached responses.</p>
+    </div>
+    <div>
+      <h3>Heuristic union</h3>
+      <p class="small">Three high-precision deterministic heuristics (pre-staged tests, 0-REQUIRED mismatch, self-referential text) survive even if the LLM omits them.</p>
+    </div>
+    <div>
+      <h3>Cross-agent quorum</h3>
+      <p class="small">Median quorum + low-entropy gate. One-line bug fixes no longer get flagged as gold-patch leaks; one diverging agent no longer vetoes the upgrade.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ────────────────────────── 11. Status ────────────────────────── -->
+<section>
+  <h2>Current status</h2>
+  <table>
+    <tr><th>Surface</th><th>State</th></tr>
+    <tr><td>Source LOC</td><td>~9.9k (33 modules)</td></tr>
+    <tr><td>Tests</td><td>116 offline · no network · no Azure · no git clones</td></tr>
+    <tr><td>Lint</td><td><span class="pill good">ruff clean</span></td></tr>
+    <tr><td>Types</td><td><span class="pill good">mypy --strict clean</span> across all 33 modules</td></tr>
+    <tr><td>CI</td><td>Python 3.11 + 3.12 matrix on Ubuntu</td></tr>
+    <tr><td>Benchmark coverage</td><td>SWE-bench Verified · Pro · Live</td></tr>
+    <tr><td>Trajectory sources</td><td>Docent · HuggingFace · JSONL · JSON dir</td></tr>
+    <tr><td>Console scripts</td><td><code>bench-cleanser</code> · <code>bench-cleanser-trajectory</code> · <code>bench-cleanser-deep-dive</code></td></tr>
+  </table>
+  <h3 class="small">Honest caveats</h3>
+  <ul class="small">
+    <li><code>CLEAN</code> means "no contamination signal on seven labels" — not "perfect benchmark item."</li>
+    <li>Axis-1 labels inherit LLM judgement noise; deterministic stages only amplify what upstream labels say.</li>
+    <li>Cross-reference coupling is file-level, not function-level — known gap in <code>audits/severe/AUDIT_PROTOCOL.md</code>.</li>
+    <li>This is a research instrument, not a metric. It makes human review tractable; it does not replace it.</li>
+  </ul>
+</section>
+
+<!-- ────────────────────────── 12. Close ────────────────────────── -->
+<section class="center">
+  <h2>What's it for</h2>
+  <p class="lead">If you train on SWE-bench rows, every contaminated task teaches the wrong lesson.<br>If you publish numbers against it, every contaminated row distorts the score.</p>
+  <p><code>bench-cleanser</code> is the tool you run before either.</p>
+  <p class="small dim">github.com/v-liaozhu/bench-cleanser · MIT · v1.0.0</p>
+</section>
+
+</div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/highlight.js"></script>
+<script>
+  Reveal.initialize({
+    hash: true,
+    transition: 'fade',
+    width: 1280,
+    height: 800,
+    margin: 0.06,
+    plugins: [ RevealHighlight ],
+  });
+</script>
+</body>
+</html>
