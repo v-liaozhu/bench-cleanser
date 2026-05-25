@@ -1,9 +1,7 @@
-"""Regression tests for Fusion Rule 4 (AMBIGUOUS_PASS vs INCONCLUSIVE).
+"""Fusion Rule 4 (AMBIGUOUS_PASS vs INCONCLUSIVE).
 
-Rule 4 was previously misfiring: the discriminator between AMBIGUOUS_PASS
-and INCONCLUSIVE was an analysis-identity check that was always true. The
-v1.0.0 fix routes the decision through ``TrajectoryAnalysis.resolved`` —
-the agent's reported pass/fail outcome on the F2P tests.
+Discriminator is ``TrajectoryAnalysis.resolved`` — the agent's reported
+pass/fail outcome on the F2P tests.
 
 Matrix:
 

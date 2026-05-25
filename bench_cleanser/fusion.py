@@ -4,8 +4,6 @@ Combines Axis 1 (task contamination) and Axis 2 (per-agent trajectory)
 into a single fairness verdict per (task, agent). Deterministic — no
 LLM call. Every verdict is reproducible from the two axis labels and
 the trajectory's `resolved` outcome.
-
-See docs/FUSION.md for the rule reference and worked examples.
 """
 
 from __future__ import annotations
@@ -23,7 +21,7 @@ from bench_cleanser.trajectory.models import TrajectoryAnalysis
 
 
 class FusionVerdict(str, Enum):
-    """Combined fairness verdict per (task, agent). See docs/FUSION.md."""
+    """Combined fairness verdict per (task, agent)."""
 
     FAIR_PASS = "fair_pass"
     AGENT_CHEATED = "agent_cheated"
@@ -88,8 +86,7 @@ def fuse(
 ) -> TaskTrajectoryFusion:
     """Fuse one task report with one agent trajectory analysis.
 
-    Rules are evaluated top-down; first match wins. See docs/FUSION.md
-    for the full rule reference.
+    Rules are evaluated top-down; first match wins.
     """
     labels = [a.label for a in report.task_labels]
     label_set = set(labels)
@@ -141,7 +138,7 @@ def fuse(
         )
 
     # Rule 4 — passed but trajectory unknown. Discriminator is
-    # `trajectory.resolved`; see docs/FUSION.md.
+    # `trajectory.resolved`.
     if traj in _AGENT_UNKNOWN:
         evidence.append("Trajectory classification inconclusive")
         if trajectory.resolved:

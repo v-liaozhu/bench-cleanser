@@ -545,18 +545,12 @@ async def classify_task_labels(
             ))
 
         # Protect a curated set of high-precision deterministic heuristics
-        # from being silently overruled by the LLM. The LLM is the *primary*
-        # classifier (it can refine evidence, judge nuance, and combine
-        # signals) but for a small subset of heuristics the *signal itself
-        # is the ground truth* — the LLM has no extra information that
-        # would let it override them. Pre-staged tests via
-        # before_repo_set_cmd, 0-REQUIRED task/patch mismatch, and self-
-        # referential problem text fall into this category: the heuristic
-        # already cites unambiguous evidence the LLM doesn't see.
-        #
-        # The union policy: any protected heuristic that fired AND is
-        # absent from the LLM output is appended with its original
-        # evidence. The LLM's labels still drive everything else.
+        # from being silently overruled by the LLM. For pre-staged tests,
+        # 0-REQUIRED task/patch mismatch, and self-referential problem text
+        # the heuristic already cites unambiguous evidence the LLM doesn't
+        # see — so if such a heuristic fired and the LLM dropped it, we
+        # re-append the original evidence. The LLM still drives everything
+        # else.
         protected_evidence_markers = (
             "Pre-staged via before_repo_set_cmd",
             "Tests pre-staged via before_repo_set_cmd",

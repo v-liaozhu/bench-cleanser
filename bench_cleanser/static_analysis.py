@@ -53,10 +53,6 @@ _UNITTEST_ASSERT_METHODS = {
 }
 
 
-# -------------------------------------------------------------------
-# Function call extraction
-# -------------------------------------------------------------------
-
 def extract_test_calls(test_source: str) -> list[str]:
     """Extract all function/method call names from test source via AST.
 
@@ -98,10 +94,6 @@ def _call_name(node: ast.Call) -> str:
         return ".".join(parts)
     return ""
 
-
-# -------------------------------------------------------------------
-# Assertion extraction
-# -------------------------------------------------------------------
 
 def extract_assertions(test_source: str) -> list[Assertion]:
     """Extract structured assertions from test source.
@@ -192,10 +184,6 @@ def _get_source_line(lines: list[str], lineno: int) -> str:
     return ""
 
 
-# -------------------------------------------------------------------
-# Import resolution
-# -------------------------------------------------------------------
-
 def resolve_imports(
     file_content: str,
     repo_path: pathlib.Path,
@@ -244,10 +232,6 @@ def _resolve_module_path(module: str, repo_path: pathlib.Path) -> str:
             return candidate
     return ""
 
-
-# -------------------------------------------------------------------
-# Identify tested functions
-# -------------------------------------------------------------------
 
 def identify_tested_functions(
     test_source: str,
@@ -351,10 +335,6 @@ def _normalize_path(p: str) -> str:
     """Normalize a file path for comparison."""
     return p.replace("\\", "/").lstrip("/").rstrip("/")
 
-
-# -------------------------------------------------------------------
-# Build call targets with patch awareness
-# -------------------------------------------------------------------
 
 def build_call_targets(
     test_source: str,

@@ -1,13 +1,10 @@
-"""Regression tests for the heuristic pre-classifier in :mod:`bench_cleanser.classification.dual_taxonomy`.
+"""Heuristic pre-classifier in :mod:`bench_cleanser.classification.dual_taxonomy`.
 
 The pre-classifier emits *candidates* (label + evidence) that the LLM
-classifier may refine. The contract we lock in here is:
+classifier may refine. The contract:
 
   * One ``TaskLabelAssignment`` per axis-1 label per task — never duplicates.
   * All accumulated evidence rolls into that single assignment.
-
-The "no duplicate OVER_TEST" rule was a real bug fixed during the v1.0.0
-release; this test prevents it from regressing.
 """
 
 from __future__ import annotations

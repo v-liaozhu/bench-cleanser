@@ -11,21 +11,12 @@ import re
 
 from bench_cleanser.models import PatchHunk
 
-# ---------------------------------------------------------------------------
-# Compiled patterns
-# ---------------------------------------------------------------------------
-
 _DIFF_GIT_RE = re.compile(r"^diff --git a/(.+?) b/(.+)$")
 _MINUS_FILE_RE = re.compile(r"^--- (?:a/)?(.+)$")
 _PLUS_FILE_RE = re.compile(r"^\+\+\+ (?:b/)?(.+)$")
 _HUNK_HEADER_RE = re.compile(
     r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@(.*)$"
 )
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 def parse_patch(patch_text: str) -> list[PatchHunk]:

@@ -11,10 +11,6 @@ import re
 from bench_cleanser.models import PatchHunk, TestHunk, TestModificationType
 from bench_cleanser.parsing.patch_parser import parse_patch
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
 _DEF_TEST_RE = re.compile(r"^(\s*)def\s+(test_\w+)\s*\(")
 
 # Multi-language test function patterns
@@ -92,11 +88,6 @@ def _indent_level(line: str) -> int:
     """Return the number of leading spaces (after stripping diff prefix)."""
     stripped = _strip_diff_prefix(line)
     return len(stripped) - len(stripped.lstrip(" "))
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 def classify_test_modification(hunk: PatchHunk) -> TestModificationType:
@@ -346,11 +337,6 @@ def match_f2p_tests_to_hunks(
             unmatched.append(test_id)
 
     return matched, unmatched
-
-
-# ---------------------------------------------------------------------------
-# Private helpers
-# ---------------------------------------------------------------------------
 
 
 def _classify_function(

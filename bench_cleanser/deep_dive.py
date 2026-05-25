@@ -335,7 +335,6 @@ def generate_deep_dive_document(
     parts = []
     parts.append(f"# {title}\n")
     parts.append(f"> **Generated:** {now}")
-    parts.append(f"> **Pipeline:** bench-cleanser v1.2")
     parts.append(f"> **Dataset:** {dataset_name}")
     parts.append(f"> **Cases:** {len(cases)} contamination instances with assertion-level traceability")
     parts.append("\n---\n")

@@ -1,13 +1,7 @@
 """Unit tests for :mod:`bench_cleanser.trajectory.classifier`.
 
-The trajectory classifier was silently broken during the v1.0.0 prompt-
-extraction refactor — pytest passed because nothing in ``tests/`` imported
-the module. These tests close that gap: import the module, exercise every
-public function, and verify it can be wired to a fake LLM client.
-
-The LLM tier is exercised against an in-test ``FakeLLM`` that returns a
-canned :class:`TrajectoryClassificationResponse`, so this file stays fully
-offline.
+Exercises every public function and verifies the LLM path against an
+in-test ``FakeLLM`` so the suite stays offline.
 """
 
 from __future__ import annotations

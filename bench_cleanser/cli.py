@@ -1,14 +1,8 @@
-"""Consolidated CLI entry points for bench-cleanser.
-
-Three console scripts (declared in ``pyproject.toml [project.scripts]``):
+"""Console entry points for bench-cleanser.
 
 * ``bench-cleanser``              -> :func:`main`             (contamination pipeline)
 * ``bench-cleanser-trajectory``   -> :func:`trajectory_main`  (Stage 7 fusion + leakage)
 * ``bench-cleanser-deep-dive``    -> :func:`deep_dive_main`   (forensic markdown)
-
-The legacy ``run_pipeline.py`` / ``run_trajectory_analysis.py`` / ``run_deep_dive.py``
-files at the repo root are now thin shims that delegate to the functions in this
-module. Prefer the console-script names — they survive package upgrades.
 """
 
 from __future__ import annotations

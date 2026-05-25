@@ -406,13 +406,9 @@ async def run_pipeline(
                     behavioral_contract="", acceptance_criteria=[], out_of_scope="",
                     ambiguity_score=0.0, raw_llm_response=f"Pipeline error: {exc}",
                 )
-                # Pipeline errors are NOT contamination findings — flagging
-                # them as SEVERE would inflate aggregate counts and trip
-                # Stage-7 fusion into spurious CONTAMINATED_PASS verdicts.
-                # Severity is forced to CLEAN so the documented
-                # "severity = set membership over task_labels" invariant
-                # holds on disk; `pipeline_error` is the only flag a
-                # consumer needs to filter these rows out.
+                # Pipeline errors are not contamination findings; SEVERE
+                # would inflate counts and trip Stage-7 into spurious
+                # CONTAMINATED_PASS. `pipeline_error` is the filter flag.
                 report = ContaminationReport(
                     instance_id=record.instance_id,
                     severity=Severity.CLEAN,

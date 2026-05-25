@@ -253,9 +253,9 @@ def _build_user_prompt(
 ) -> str:
     """Render the per-call user message for trajectory analysis.
 
-    The system prompt (`trajectory_analysis.md`) defines the role, the
-    taxonomy, and the schema. This function only assembles task-specific
-    data — problem statement, gold patch, heuristic signals, action trace.
+    The system prompt defines the role, taxonomy, and schema. This
+    function assembles task-specific data — problem statement, gold
+    patch, heuristic signals, action trace.
     """
     action_summary = _summarize_actions(trajectory.actions)
     signals_section = json.dumps(heuristic_signals, indent=2)
@@ -364,18 +364,13 @@ async def classify_with_llm(
 
 
 
-# Cross-agent upgrade rule constants.
+# CROSS_AGENT_QUORUM_THRESHOLD: median pairwise patch similarity above
+# which we treat the cluster as "converged." Using the median means one
+# outlier in a multi-model comparison doesn't suppress a clear signal.
 #
-# CROSS_AGENT_QUORUM_THRESHOLD: median pairwise patch similarity above which
-# we consider the cluster "converged" enough to suspect gold-patch leakage.
-# Using the median (not all-pairs) means one outlier agent — common in
-# multi-model comparisons — doesn't suppress an otherwise clear signal.
-#
-# LOW_ENTROPY_PATCH_LINES: a gate that prevents the upgrade firing on
-# trivial problems where independent agents legitimately converge. A
-# one-line bug fix has effectively one correct answer; agreeing on it
-# is not evidence of leakage. The threshold counts non-empty added
-# lines in the gold patch (proxy for problem entropy).
+# LOW_ENTROPY_PATCH_LINES: skip the upgrade on trivial problems where
+# independent agents legitimately converge — a one-line fix has one
+# correct answer, agreement isn't evidence of leakage.
 CROSS_AGENT_QUORUM_THRESHOLD = 0.85
 LOW_ENTROPY_PATCH_LINES = 10
 

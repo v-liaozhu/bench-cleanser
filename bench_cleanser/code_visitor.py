@@ -14,10 +14,6 @@ import pathlib
 logger = logging.getLogger(__name__)
 
 
-# -------------------------------------------------------------------
-# AST-based function extraction
-# -------------------------------------------------------------------
-
 def extract_function_source(
     file_content: str,
     func_name: str,
@@ -92,30 +88,11 @@ def get_post_patch_test_source(
     if not pre_patch_content:
         return "\n".join(added_lines)
 
-    # For a robust approach: find the function in pre_patch_content,
-    # then apply the removed/added lines.  In practice, the simplest
-    # approach is to reconstruct from the diff: take the pre-patch
-    # function and apply line-level substitution.
-    #
-    # However, for our purposes, the most reliable method is:
-    # - If the test is MODIFIED, the post-patch version is the pre-patch
-    #   minus removed lines plus added lines.
-    # - If the test is NEW, post_patch = added_lines.
-    #
-    # Since we don't have a proper diff application library, we use
-    # the raw_diff reconstruction from test_parser.  For LLM analysis
-    # purposes, providing both pre and post separately is sufficient.
-
-    # Simple approach: return the added lines as post-patch source
     if added_lines:
         return "\n".join(added_lines)
 
     return pre_patch_content
 
-
-# -------------------------------------------------------------------
-# Import / fixture extraction
-# -------------------------------------------------------------------
 
 def extract_imports(file_content: str) -> str:
     """Extract import statements from a Python file.
@@ -190,10 +167,6 @@ def extract_fixtures(
 
     return "\n\n".join(fixtures)
 
-
-# -------------------------------------------------------------------
-# ProblemCodeContext extraction (Stage 1.5)
-# -------------------------------------------------------------------
 
 import re as _re
 
