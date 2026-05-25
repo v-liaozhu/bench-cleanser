@@ -239,6 +239,24 @@ class LLMClient:
         )
 
     @staticmethod
+    def _strip_fences(text: str) -> str:
+        """Remove a single surrounding ```json ... ``` (or bare ```) fence.
+
+        ``reasoning_effort=high`` calls occasionally wrap JSON in fences
+        even when ``response_format={"type":"json_object"}`` is in effect.
+        Validating the wrapped string against Pydantic fails and burns a
+        retry; stripping a single outer fence first turns these into
+        zero-retry happy-path validations.
+        """
+        s = text.strip()
+        if not s.startswith("```"):
+            return s
+        match = re.match(r"```(?:json)?\s*\n?(.*?)```\s*$", s, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        return s
+
+    @staticmethod
     def _extract_json(text: str) -> dict[str, Any]:
         """Parse *text* as JSON, handling optional markdown fences.
 
@@ -357,6 +375,81 @@ class LLMClient:
 
         return self._extract_json(result)
 
+    @staticmethod
+    def _strictify_schema(schema: dict[str, Any]) -> dict[str, Any]:
+        """Transform a Pydantic-generated JSON schema into OpenAI strict mode.
+
+        Strict mode requires:
+          - ``additionalProperties: false`` on every object
+          - every property listed in ``required`` (no optional fields)
+          - no ``default`` keys on properties
+          - ``$defs`` references resolved to objects that meet the same rules
+
+        Pydantic does not produce strict-compatible schemas by default
+        (``default_factory=list``, ``default=""`` etc. are common). Rather
+        than rewriting every schema we transform the generated one in
+        place: optional fields become required (they're already validated
+        as nullable / list-typed by Pydantic, so the model just has to
+        emit them — empty list or empty string is fine), defaults are
+        dropped, and ``additionalProperties: false`` is forced.
+
+        Returns a new dict; the input is not mutated.
+        """
+        def _walk(node: Any) -> Any:
+            if isinstance(node, dict):
+                out: dict[str, Any] = {}
+                for k, v in node.items():
+                    if k == "default":
+                        # Strict mode rejects per-property defaults.
+                        continue
+                    out[k] = _walk(v)
+                if out.get("type") == "object" or "properties" in out:
+                    out["additionalProperties"] = False
+                    props = out.get("properties")
+                    if isinstance(props, dict):
+                        # Every property must be required in strict mode.
+                        out["required"] = list(props.keys())
+                return out
+            if isinstance(node, list):
+                return [_walk(x) for x in node]
+            return node
+
+        return _walk(schema)
+
+    def _build_strict_response_format(
+        self, response_model: type[T]
+    ) -> dict[str, Any]:
+        """Build an OpenAI ``response_format`` for true json_schema mode."""
+        schema = self._strictify_schema(response_model.model_json_schema())
+        # OpenAI's strict mode requires a flat schema (no $defs/$ref). Resolve
+        # any $defs by inlining them. Pydantic emits $defs for nested models;
+        # we expand the top-level schema to inline references.
+        defs = schema.pop("$defs", None) or schema.pop("definitions", None)
+
+        def _resolve_refs(node: Any) -> Any:
+            if isinstance(node, dict):
+                if "$ref" in node and defs:
+                    ref = node["$ref"]
+                    # Refs look like "#/$defs/Foo" — extract the trailing name.
+                    name = ref.rsplit("/", 1)[-1]
+                    if name in defs:
+                        return _resolve_refs(self._strictify_schema(defs[name]))
+                return {k: _resolve_refs(v) for k, v in node.items()}
+            if isinstance(node, list):
+                return [_resolve_refs(x) for x in node]
+            return node
+
+        resolved = _resolve_refs(schema)
+
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": response_model.__name__,
+                "schema": resolved,
+                "strict": True,
+            },
+        }
+
     async def query_structured(
         self,
         system_prompt: str,
@@ -367,10 +460,13 @@ class LLMClient:
     ) -> T:
         """Send a chat-completion with Pydantic schema enforcement.
 
-        Appends the JSON schema to the system prompt and uses
-        ``response_format={"type": "json_object"}`` for API-level JSON
-        guarantee. The response is then validated against the Pydantic
-        model. No regex extraction, no silent fallbacks.
+        Uses ``response_format={"type":"json_schema","strict":true}`` so the
+        API itself rejects malformed candidates before they reach us. The
+        result is still validated against the Pydantic model as defence in
+        depth — strict mode is a constrained-decoding aid, not a Pydantic
+        substitute. If the API rejects the strict schema (``BadRequestError``
+        on regions/models that don't support strict), we fall back to
+        ``json_object`` mode with the schema pasted into the system prompt.
 
         Parameters
         ----------
@@ -394,6 +490,9 @@ class LLMClient:
             on all attempts.
         """
         # Append schema to system prompt so the LLM knows the exact structure
+        # even on the json_object fallback path. On the strict path the API
+        # enforces the schema, but the same augmented prompt is used so the
+        # cache key is identical across modes (one cache entry per call).
         schema_json = json.dumps(response_model.model_json_schema(), indent=2)
         augmented_system = (
             system_prompt.rstrip()
@@ -411,22 +510,47 @@ class LLMClient:
             if cached is not None:
                 logger.debug("Cache hit (structured) for key %s", key[:12])
                 try:
-                    return response_model.model_validate_json(cached)
+                    return response_model.model_validate_json(self._strip_fences(cached))
                 except ValidationError:
                     logger.info(
                         "Cached response failed schema validation for %s, re-querying",
                         response_model.__name__,
                     )
 
+        try:
+            strict_format = self._build_strict_response_format(response_model)
+        except Exception as exc:
+            logger.warning(
+                "Could not build strict json_schema for %s (%s); falling back to json_object",
+                response_model.__name__, exc,
+            )
+            strict_format = None
+
         max_validation_attempts = 2
         last_error: Exception | None = None
         last_payload: str = ""
+        use_strict = strict_format is not None
 
         for attempt in range(1, max_validation_attempts + 1):
-            result = await self._call_api(
-                augmented_system, user_prompt,
-                response_format={"type": "json_object"},
-            )
+            try:
+                result = await self._call_api(
+                    augmented_system, user_prompt,
+                    response_format=strict_format if use_strict else {"type": "json_object"},
+                )
+            except RuntimeError as exc:
+                # _call_api raises RuntimeError after exhausting retries.
+                # If we're still on the strict path and the failure smells
+                # like a schema-rejection (BadRequest about response_format),
+                # downgrade and try again on json_object. Other failures
+                # propagate.
+                if use_strict and "BadRequestError" in str(exc):
+                    logger.warning(
+                        "Strict json_schema rejected for %s; falling back to json_object",
+                        response_model.__name__,
+                    )
+                    use_strict = False
+                    continue
+                raise
 
             if not result:
                 raise RuntimeError(
@@ -439,7 +563,7 @@ class LLMClient:
                 self._cache.put(key, result, model=self._model)
 
             try:
-                return response_model.model_validate_json(result)
+                return response_model.model_validate_json(self._strip_fences(result))
             except ValidationError as exc:
                 last_error = exc
                 last_payload = result

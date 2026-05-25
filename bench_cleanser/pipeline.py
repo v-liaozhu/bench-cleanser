@@ -62,6 +62,31 @@ from bench_cleanser.static_analysis import (
 logger = logging.getLogger(__name__)
 
 
+def _atomic_write_text(path: pathlib.Path, payload: str) -> None:
+    """Atomically write *payload* to *path* via a same-directory tempfile.
+
+    A bare ``Path.write_text`` is not atomic: an interrupt mid-write leaves
+    a truncated file on disk, which ``--resume`` will then re-load as if it
+    were a real report. ``os.replace`` is atomic on POSIX and on Windows
+    NTFS, so a reader either sees the previous contents or the new ones.
+    """
+    import os
+    import tempfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+        os.replace(tmp_path, str(path))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def load_config(config_path: str) -> PipelineConfig:
     """Load pipeline configuration from a YAML file."""
     with open(config_path, encoding="utf-8") as fh:
@@ -381,18 +406,35 @@ async def run_pipeline(
                     behavioral_contract="", acceptance_criteria=[], out_of_scope="",
                     ambiguity_score=0.0, raw_llm_response=f"Pipeline error: {exc}",
                 )
+                # Pipeline errors are NOT contamination findings — flagging
+                # them as SEVERE would inflate aggregate counts and trip
+                # Stage-7 fusion into spurious CONTAMINATED_PASS verdicts.
+                # Severity is forced to CLEAN so the documented
+                # "severity = set membership over task_labels" invariant
+                # holds on disk; `pipeline_error` is the only flag a
+                # consumer needs to filter these rows out.
                 report = ContaminationReport(
                     instance_id=record.instance_id,
-                    severity=Severity.SEVERE,
+                    severity=Severity.CLEAN,
                     intent=dummy_intent,
                     patch_analysis=PatchAnalysis(total_hunks=0, required_count=0, ancillary_count=0, unrelated_count=0),
                     test_analysis=TestAnalysis(total_tests=0, aligned_count=0, tangential_count=0, unrelated_count=0, total_assertions=0, on_topic_assertions=0, off_topic_assertions=0, has_modified_tests=False),
                     description_clarity=DescriptionClarity(score=0.0, reasoning=f"PIPELINE_ERROR: {exc}"),
+                    pipeline_error=f"{type(exc).__name__}: {exc}",
                 )
 
             report_path = reports_dir / f"{record.instance_id}.json"
-            report_path.write_text(json.dumps(report.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
-            severity_counts[report.severity.value] += 1
+            # Atomic write so an interrupt or concurrent reader can never
+            # observe a half-written report. --resume scans for these files
+            # by name; truncated JSON would silently poison the next run.
+            _atomic_write_text(
+                report_path,
+                json.dumps(report.to_dict(), indent=2, ensure_ascii=False),
+            )
+            # Exclude pipeline-error rows from the live severity dashboard
+            # so CLEAN doesn't get inflated by failures.
+            if report.pipeline_error is None:
+                severity_counts[report.severity.value] += 1
             if progress_callback is not None:
                 progress_callback()
             return report
@@ -440,7 +482,8 @@ async def run_pipeline(
                             data = json.loads(report_path.read_text(encoding="utf-8"))
                             resumed = ContaminationReport.from_dict(data)
                             reports.append(resumed)
-                            severity_counts[resumed.severity.value] += 1
+                            if resumed.pipeline_error is None:
+                                severity_counts[resumed.severity.value] += 1
                         except Exception as exc:
                             logger.warning(
                                 "Failed to load resumed report %s: %s",
@@ -480,7 +523,8 @@ async def run_pipeline(
                     data = json.loads(report_path.read_text(encoding="utf-8"))
                     resumed = ContaminationReport.from_dict(data)
                     reports.append(resumed)
-                    severity_counts[resumed.severity.value] += 1
+                    if resumed.pipeline_error is None:
+                        severity_counts[resumed.severity.value] += 1
                 except Exception as exc:
                     logger.warning("Failed to load resumed report %s: %s", report_path.stem, exc)
 
@@ -492,7 +536,13 @@ def _write_summary(
     reports: list[ContaminationReport],
     output_dir: pathlib.Path,
 ) -> None:
-    """Write aggregate summary CSV and stats JSON."""
+    """Write aggregate summary CSV and stats JSON.
+
+    Pipeline-error rows are written to the CSV with a clear marker so the
+    operator can see them, but are excluded from the aggregate severity
+    and label distributions — they carry no analytic signal and would
+    otherwise inflate the published numbers.
+    """
     csv_path = output_dir / "summary.csv"
     fieldnames = [
         "instance_id", "severity",
@@ -503,6 +553,7 @@ def _write_summary(
         "legitimacy", "suggested_fix",
         "mentioned_entities",
         "recommendations",
+        "pipeline_error",
     ]
 
     output = io.StringIO()
@@ -547,21 +598,29 @@ def _write_summary(
             "suggested_fix": (decomp.suggested_fix[:200] if decomp and decomp.suggested_fix else ""),
             "mentioned_entities": ";".join(entities[:15]),
             "recommendations": "; ".join(r.recommendations),
+            "pipeline_error": r.pipeline_error or "",
         })
 
     csv_path.write_text(output.getvalue(), encoding="utf-8")
 
+    # Pipeline-error rows are excluded from the aggregate distributions but
+    # surfaced separately so the operator can see they exist.
+    analytic_reports = [r for r in reports if r.pipeline_error is None]
+    error_reports = [r for r in reports if r.pipeline_error is not None]
+
     severity_counts: dict[str, int] = {"CLEAN": 0, "MINOR": 0, "MODERATE": 0, "SEVERE": 0}
-    for r in reports:
+    for r in analytic_reports:
         severity_counts[r.severity.value] += 1
 
     label_counts: dict[str, int] = {}
-    for r in reports:
+    for r in analytic_reports:
         for tl in r.task_labels:
             label_counts[tl.label.value] = label_counts.get(tl.label.value, 0) + 1
 
     stats = {
         "total_tasks": len(reports),
+        "analytic_tasks": len(analytic_reports),
+        "pipeline_errors": len(error_reports),
         "severity_distribution": severity_counts,
         "label_distribution": label_counts,
     }

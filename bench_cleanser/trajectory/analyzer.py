@@ -38,8 +38,15 @@ async def analyze_trajectories(
     problem_statements: dict[str, str],
     llm: Any | None = None,
     contamination_reports: dict[str, ContaminationReport] | None = None,
+    max_concurrency: int = 10,
 ) -> list[TrajectoryAnalysis]:
     import asyncio
+
+    # Bound LLM fan-out so we don't fire N parallel Azure requests when called
+    # with hundreds of trajectories. Without this cap rate-limit storms drive
+    # _analyze_one into its heuristic-only fallback, silently degrading the
+    # LLM-primary analysis the pipeline claims to perform.
+    semaphore = asyncio.Semaphore(max(1, max_concurrency))
 
     completed = 0
     pattern_counts: dict[str, int] = defaultdict(int)
@@ -61,42 +68,43 @@ async def analyze_trajectories(
 
     async def _analyze_one(traj: TrajectoryRecord, progress=None, task_id=None) -> TrajectoryAnalysis:
         nonlocal completed
-        gold_patch = gold_patches.get(traj.instance_id, "")
-        test_names = f2p_tests.get(traj.instance_id, [])
-        problem = problem_statements.get(traj.instance_id, "")
+        async with semaphore:
+            gold_patch = gold_patches.get(traj.instance_id, "")
+            test_names = f2p_tests.get(traj.instance_id, [])
+            problem = problem_statements.get(traj.instance_id, "")
 
-        heuristic_signals = extract_heuristic_signals(traj, gold_patch, test_names)
+            heuristic_signals = extract_heuristic_signals(traj, gold_patch, test_names)
 
-        contamination_context = ""
-        if contamination_reports and traj.instance_id in contamination_reports:
-            report = contamination_reports[traj.instance_id]
-            contamination_context = _build_contamination_context(report)
+            contamination_context = ""
+            if contamination_reports and traj.instance_id in contamination_reports:
+                report = contamination_reports[traj.instance_id]
+                contamination_context = _build_contamination_context(report)
 
-        if llm is not None and problem:
-            result = await classify_with_llm(
-                traj, gold_patch, problem, test_names, llm,
-                heuristic_signals=heuristic_signals,
-                contamination_context=contamination_context,
+            if llm is not None and problem:
+                result = await classify_with_llm(
+                    traj, gold_patch, problem, test_names, llm,
+                    heuristic_signals=heuristic_signals,
+                    contamination_context=contamination_context,
+                )
+            else:
+                result = classify_heuristic_only(traj, gold_patch, test_names)
+
+            completed += 1
+            pattern_counts[result.leakage_pattern.value] += 1
+
+            if progress is not None and task_id is not None:
+                status_parts = []
+                for p, c in sorted(pattern_counts.items()):
+                    status_parts.append(f"{p}:{c}")
+                progress.update(task_id, advance=1, status=" ".join(status_parts))
+
+            logger.debug(
+                "%s/%s: %s (strength=%s, sim=%.2f)",
+                traj.instance_id, traj.agent_name,
+                result.leakage_pattern.value, result.evidence_strength,
+                result.gold_patch_similarity,
             )
-        else:
-            result = classify_heuristic_only(traj, gold_patch, test_names)
-
-        completed += 1
-        pattern_counts[result.leakage_pattern.value] += 1
-
-        if progress is not None and task_id is not None:
-            status_parts = []
-            for p, c in sorted(pattern_counts.items()):
-                status_parts.append(f"{p}:{c}")
-            progress.update(task_id, advance=1, status=" ".join(status_parts))
-
-        logger.debug(
-            "%s/%s: %s (strength=%s, sim=%.2f)",
-            traj.instance_id, traj.agent_name,
-            result.leakage_pattern.value, result.evidence_strength,
-            result.gold_patch_similarity,
-        )
-        return result
+            return result
 
     if use_rich:
         console = Console()
@@ -374,6 +382,7 @@ async def run_trajectory_analysis(
     llm: Any | None = None,
     api_key: str = "",
     model_filter: str = "",
+    max_concurrency: int = 10,
 ) -> str:
     from bench_cleanser.deep_dive import load_reports_from_dir
 
@@ -447,6 +456,7 @@ async def run_trajectory_analysis(
         trajectories, gold_patches, f2p_tests, problem_statements,
         llm=llm,
         contamination_reports=contamination_reports,
+        max_concurrency=max_concurrency,
     )
 
     summary = generate_trajectory_summary(analyses)
@@ -479,7 +489,9 @@ async def run_trajectory_analysis(
     invalidated = 0
     for a in analyses:
         rep = contamination_reports.get(a.instance_id)
-        if rep is None:
+        if rep is None or rep.pipeline_error is not None:
+            # Pipeline-error reports carry no analytic signal; fusing
+            # against them would produce spurious verdicts.
             continue
         f = fuse(rep, a)
         fusion_counter[f.verdict.value] += 1
@@ -518,7 +530,7 @@ async def run_trajectory_analysis(
         fusions: list[dict] = []
         for a in analyses:
             rep = contamination_reports.get(a.instance_id)
-            if rep is None:
+            if rep is None or rep.pipeline_error is not None:
                 continue
             fusions.append(fuse(rep, a).to_dict())
 

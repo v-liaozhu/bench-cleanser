@@ -430,6 +430,14 @@ class ContaminationReport:
     task_labels: list[TaskLabelAssignment] = field(default_factory=list)
     agent_labels: dict[str, AgentLabelAssignment] = field(default_factory=dict)
     recommendations: list[str] = field(default_factory=list)
+    # Non-empty when this report represents a pipeline failure (LLM hang,
+    # repo clone failure, schema-validation exhaustion, etc.) rather than
+    # a real classification. Downstream consumers MUST exclude these rows
+    # from aggregate statistics and from Stage-7 fusion — they carry no
+    # analytic signal. Severity is forced to CLEAN in this case so the
+    # documented "severity is set membership over task_labels" invariant
+    # continues to hold for any row a reviewer recomputes from disk.
+    pipeline_error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -519,6 +527,7 @@ class ContaminationReport:
                 for agent, al in self.agent_labels.items()
             },
             "recommendations": self.recommendations,
+            **({"pipeline_error": self.pipeline_error} if self.pipeline_error else {}),
         }
 
     @classmethod
@@ -625,6 +634,7 @@ class ContaminationReport:
             description_clarity=description_clarity,
             task_labels=task_labels,
             recommendations=data.get("recommendations", []),
+            pipeline_error=data.get("pipeline_error"),
         )
 
 

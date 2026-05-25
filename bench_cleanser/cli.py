@@ -220,6 +220,7 @@ def trajectory_main() -> None:
     )
 
     llm = None
+    max_concurrency = 10
     try:
         from bench_cleanser.cache import ResponseCache
         from bench_cleanser.llm_client import LLMClient
@@ -228,6 +229,7 @@ def trajectory_main() -> None:
         config = load_config(args.config)
         cache = ResponseCache(config.cache_dir)
         llm = LLMClient(config, cache=cache)
+        max_concurrency = config.max_concurrent_requests
         logging.info("LLM-primary trajectory analysis enabled (%s)", config.llm_model)
     except Exception as exc:
         logging.warning(
@@ -247,6 +249,7 @@ def trajectory_main() -> None:
         llm=llm,
         api_key=args.docent_api_key,
         model_filter=args.model_filter,
+        max_concurrency=max_concurrency,
     ))
 
     if not args.output:
