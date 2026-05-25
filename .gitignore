@@ -58,6 +58,9 @@ agent_results.json
 coverage.xml
 htmlcov/
 
+# Generated deck (rebuild with `python scripts/build_pptx.py`)
+docs/overview.pptx
+
 # Scratch / working files at the repo root (e.g. _dump_one.py, _scratch.md).
 # Anchored with `/` so they do NOT match legitimate underscored package
 # directories like `bench_cleanser/_internal/`.

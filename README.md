@@ -501,7 +501,7 @@ Directly related work:
 - [`docs/TAXONOMY.md`](docs/TAXONOMY.md) — Axis-1 / Axis-2 labels, evidence rules, severity mapping.
 - [`docs/FUSION.md`](docs/FUSION.md) — Stage-7 rule matrix and worked examples.
 - [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — Dev workflow, label / verdict extension checklists, code style.
-- [`docs/overview.html`](docs/overview.html) — 12-slide reveal.js project overview (open in any browser).
+- [`docs/overview.html`](docs/overview.html) — 12-slide reveal.js project overview (open in any browser). A PowerPoint port is built on demand with `python scripts/build_pptx.py` → `docs/overview.pptx`.
 - [`CHANGELOG.md`](CHANGELOG.md) — Release history.
 
 ---
