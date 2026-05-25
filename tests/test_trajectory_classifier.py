@@ -41,12 +41,20 @@ _GOLD_PATCH = """\
 diff --git a/foo.py b/foo.py
 --- a/foo.py
 +++ b/foo.py
-@@ -1,3 +1,5 @@
+@@ -1,3 +1,15 @@
 -def add(a, b):
 -    return a + b
 +def add(a, b):
 +    if a is None or b is None:
 +        raise ValueError("None operand")
++    if not isinstance(a, (int, float)):
++        raise TypeError("non-numeric a")
++    if not isinstance(b, (int, float)):
++        raise TypeError("non-numeric b")
++    if a > 1e300 or b > 1e300:
++        raise OverflowError("operand too large")
++    if a < -1e300 or b < -1e300:
++        raise OverflowError("operand too small")
 +    return a + b
 """
 

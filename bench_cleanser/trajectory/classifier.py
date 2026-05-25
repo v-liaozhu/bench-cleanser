@@ -71,10 +71,14 @@ def compute_patch_similarity(patch_a: str, patch_b: str) -> float:
                 continue
             if line.startswith("+") or line.startswith("-"):
                 content = line[1:]
-                # Simple heuristic: strip trailing `#`/`//` comments before
-                # comparing so a commented-out tweak doesn't perturb similarity.
-                content = re.sub(r'\s*#\s.*$', '', content)
-                content = re.sub(r'\s*//\s.*$', '', content)
+                # Strip trailing `#`/`//` comments before comparing so a
+                # commented-out tweak doesn't perturb similarity. Skip the
+                # strip when an unbalanced quote count signals the `#` is
+                # likely inside a string literal — otherwise we'd mangle
+                # `pattern = "match #1"` into `pattern = "match`.
+                if content.count('"') % 2 == 0 and content.count("'") % 2 == 0:
+                    content = re.sub(r'\s*#\s.*$', '', content)
+                    content = re.sub(r'\s*//\s.*$', '', content)
                 content = ' '.join(content.split())
                 if content:
                     result.append(content)
@@ -360,46 +364,111 @@ async def classify_with_llm(
 
 
 
+# Cross-agent upgrade rule constants.
+#
+# CROSS_AGENT_QUORUM_THRESHOLD: median pairwise patch similarity above which
+# we consider the cluster "converged" enough to suspect gold-patch leakage.
+# Using the median (not all-pairs) means one outlier agent — common in
+# multi-model comparisons — doesn't suppress an otherwise clear signal.
+#
+# LOW_ENTROPY_PATCH_LINES: a gate that prevents the upgrade firing on
+# trivial problems where independent agents legitimately converge. A
+# one-line bug fix has effectively one correct answer; agreeing on it
+# is not evidence of leakage. The threshold counts non-empty added
+# lines in the gold patch (proxy for problem entropy).
+CROSS_AGENT_QUORUM_THRESHOLD = 0.85
+LOW_ENTROPY_PATCH_LINES = 10
+
+
+def _count_gold_patch_added_lines(patches: list[str]) -> int:
+    """Estimate problem entropy as the median count of non-empty added lines.
+
+    Uses the median (not min) so a single outlier agent with a trivial or
+    failed patch doesn't drag the entropy estimate to zero and disable the
+    cross-agent upgrade entirely. The median across the agent cluster
+    reflects what the *problem itself* admits as a typical answer.
+    """
+    if not patches:
+        return 0
+    counts: list[int] = []
+    for patch in patches:
+        added = 0
+        for raw in patch.splitlines():
+            line = raw.rstrip()
+            if line.startswith("+") and not line.startswith("+++"):
+                if line[1:].strip():
+                    added += 1
+        counts.append(added)
+    counts.sort()
+    mid = len(counts) // 2
+    if len(counts) % 2 == 1:
+        return counts[mid]
+    return (counts[mid - 1] + counts[mid]) // 2
+
+
 def classify_cross_agent(
     analyses: list[TrajectoryAnalysis],
     trajectories: list[TrajectoryRecord],
 ) -> list[TrajectoryAnalysis]:
     """Tier 3: Cross-agent comparison.
 
-    If multiple agents produce nearly identical patches, upgrade
-    evidence_strength in GOLD_PATCH_LEAK classification.
+    Upgrades GENUINE_SOLUTION / PARTIAL_MATCH to GOLD_PATCH_LEAK when
+    multiple agents produced patches that cluster around the gold answer.
+
+    Rule (replaces the previous all-pairs short-circuit):
+
+      1. Compute pairwise similarity for every (i, j) with i < j.
+      2. If the *median* pairwise similarity ≥ CROSS_AGENT_QUORUM_THRESHOLD,
+         the cluster has quorum. Median (not min) means one diverging
+         agent doesn't veto the signal.
+      3. Gate the upgrade on patch entropy: skip if the smallest patch
+         is < LOW_ENTROPY_PATCH_LINES added lines. Low-entropy problems
+         admit one obvious answer; convergence there is not leakage.
     """
     if len(analyses) < 2:
         return analyses
 
-    # Collect final patches
     patches = [t.final_patch for t in trajectories if t.final_patch]
     if len(patches) < 2:
         return analyses
 
-    # Check pairwise similarity
-    all_similar = True
+    sims: list[float] = []
     for i in range(len(patches)):
         for j in range(i + 1, len(patches)):
-            sim = compute_patch_similarity(patches[i], patches[j])
-            if sim < HIGH_SIMILARITY_THRESHOLD:
-                all_similar = False
-                break
-        if not all_similar:
-            break
+            sims.append(compute_patch_similarity(patches[i], patches[j]))
 
-    if all_similar:
-        for analysis in analyses:
-            if analysis.leakage_pattern in (
-                LeakagePattern.GENUINE_SOLUTION,
-                LeakagePattern.PARTIAL_MATCH,
-            ):
-                analysis.evidence.append(
-                    "Cross-agent: all agents produced highly similar patches, "
-                    "suggesting gold patch leakage rather than independent derivation"
-                )
-                analysis.leakage_pattern = LeakagePattern.GOLD_PATCH_LEAK
-                analysis.evidence_strength = "strong"
+    if not sims:
+        return analyses
+
+    sims.sort()
+    mid = len(sims) // 2
+    median_sim = sims[mid] if len(sims) % 2 == 1 else (sims[mid - 1] + sims[mid]) / 2
+
+    if median_sim < CROSS_AGENT_QUORUM_THRESHOLD:
+        return analyses
+
+    min_added = _count_gold_patch_added_lines(patches)
+    if min_added < LOW_ENTROPY_PATCH_LINES:
+        logger.debug(
+            "Cross-agent quorum met (median sim %.2f) but skipping upgrade: "
+            "median patch has only %d added lines (low-entropy convergence)",
+            median_sim, min_added,
+        )
+        return analyses
+
+    for analysis in analyses:
+        if analysis.leakage_pattern in (
+            LeakagePattern.GENUINE_SOLUTION,
+            LeakagePattern.PARTIAL_MATCH,
+        ):
+            analysis.evidence.append(
+                f"Cross-agent: {len(patches)} agents converged "
+                f"(median pairwise similarity {median_sim:.2f}, "
+                f"median patch {min_added} added lines), "
+                "suggesting gold-patch leakage rather than independent derivation"
+            )
+            analysis.leakage_pattern = LeakagePattern.GOLD_PATCH_LEAK
+            analysis.evidence_strength = "strong"
 
     return analyses
 

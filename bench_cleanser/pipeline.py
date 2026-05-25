@@ -496,7 +496,14 @@ async def run_pipeline(
         final_table.add_column("Metric", style="bold")
         final_table.add_column("Value", justify="right")
         total_time = time.monotonic() - start_time
+        analytic_count = sum(1 for r in reports if r.pipeline_error is None)
+        error_reports_count = sum(1 for r in reports if r.pipeline_error is not None)
         final_table.add_row("Total tasks", str(len(reports)))
+        final_table.add_row("Analytic tasks", str(analytic_count))
+        if error_reports_count:
+            final_table.add_row(
+                "[red bold]Pipeline errors[/red bold]", str(error_reports_count),
+            )
         final_table.add_row("Elapsed", f"{total_time:.1f}s")
         final_table.add_row("Rate", f"{len(reports)/total_time*60:.1f}/min" if total_time > 0 else "N/A")
         final_table.add_row("[green]CLEAN[/green]", str(severity_counts["CLEAN"]))

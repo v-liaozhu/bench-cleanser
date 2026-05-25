@@ -154,6 +154,31 @@ class LLMClient:
         """Build a deterministic cache key for a prompt pair."""
         return ResponseCache.make_key(system_prompt, user_prompt, self._model)
 
+    # Bumped manually when a schema change should invalidate cached
+    # structured-output responses. Keeping the version tag here (rather
+    # than hashing the full Pydantic-generated schema text) means a
+    # cosmetic schema reorder caused by a pydantic upgrade does NOT
+    # wipe the cache.
+    _STRUCTURED_SCHEMA_VERSION = "v1"
+
+    def _structured_cache_key(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: type[BaseModel],
+    ) -> str:
+        """Cache key for structured calls that is stable across pydantic upgrades.
+
+        The full augmented prompt (schema text included) used to be the
+        cache key. That made the key fragile: a pydantic upgrade that
+        reorders schema keys, even cosmetically, invalidated every cached
+        entry across every prior run. Hashing the model name + a manually
+        bumped version tag instead keeps the cache stable across library
+        upgrades while still letting us invalidate intentionally.
+        """
+        schema_id = f"::schema::{response_model.__name__}::{self._STRUCTURED_SCHEMA_VERSION}"
+        return ResponseCache.make_key(system_prompt + schema_id, user_prompt, self._model)
+
     async def _call_api(
         self,
         system_prompt: str,
@@ -502,7 +527,7 @@ class LLMClient:
             + f"```json\n{schema_json}\n```"
         )
 
-        key = self._cache_key(augmented_system, user_prompt)
+        key = self._structured_cache_key(system_prompt, user_prompt, response_model)
 
         # Check cache
         if not skip_cache and self._cache is not None:

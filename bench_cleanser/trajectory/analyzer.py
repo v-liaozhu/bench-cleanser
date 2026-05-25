@@ -407,12 +407,23 @@ async def run_trajectory_analysis(
 
     logger.info("Batch-loading SWE-bench datasets for %d target instances", len(target_ids))
     all_records: dict[str, TaskRecord] = {}
+    # The cap below is intentionally generous — far larger than any current
+    # SWE-bench split. If a future split exceeds it we'd silently truncate
+    # and miss target instances, so we log a loud warning when the cap is
+    # actually approached.
+    _DATASET_HARD_CAP = 100_000
     for loader_fn, label in [
         (load_swebench_pro, "SWE-bench Pro"),
         (load_swebench_verified, "SWE-bench Verified"),
     ]:
         try:
-            records_list = loader_fn(max_tasks=10000)
+            records_list = loader_fn(max_tasks=_DATASET_HARD_CAP)
+            if len(records_list) >= _DATASET_HARD_CAP:
+                logger.warning(
+                    "%s hit the dataset hard cap (%d) — bump _DATASET_HARD_CAP "
+                    "in trajectory/analyzer.py to avoid silent truncation",
+                    label, _DATASET_HARD_CAP,
+                )
             for rec in records_list:
                 if rec.instance_id in target_ids:
                     all_records[rec.instance_id] = rec
