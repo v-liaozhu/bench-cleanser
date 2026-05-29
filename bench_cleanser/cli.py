@@ -12,7 +12,8 @@ import asyncio
 import logging
 import pathlib
 import sys
-from collections import Counter
+
+from bench_cleanser._console import setup_logging
 
 
 def _parse_pipeline_args() -> argparse.Namespace:
@@ -64,57 +65,13 @@ def _parse_pipeline_args() -> argparse.Namespace:
 
 
 def _print_pipeline_summary(reports: list) -> None:
-    severity_counts = {"CLEAN": 0, "MINOR": 0, "MODERATE": 0, "SEVERE": 0}
-    label_counter: Counter = Counter()
-    for r in reports:
-        severity_counts[r.severity.value] += 1
-        for la in r.task_labels:
-            label_counter[la.label.value] += 1
+    """Deprecated stub kept for backwards compatibility.
 
-    try:
-        from rich.console import Console
-        from rich.table import Table
-
-        console = Console()
-
-        sev_table = Table(title="bench-cleanser Results", show_header=True)
-        sev_table.add_column("Severity", style="bold")
-        sev_table.add_column("Count", justify="right")
-        sev_table.add_column("Percentage", justify="right")
-
-        colors = {"CLEAN": "green", "MINOR": "yellow",
-                  "MODERATE": "orange3", "SEVERE": "red"}
-        for sev, count in severity_counts.items():
-            pct = (count / len(reports) * 100) if reports else 0
-            sev_table.add_row(
-                f"[{colors[sev]}]{sev}[/{colors[sev]}]",
-                str(count), f"{pct:.1f}%",
-            )
-
-        console.print()
-        console.print(sev_table)
-
-        if label_counter:
-            label_table = Table(title="Task Label Distribution", show_header=True)
-            label_table.add_column("Label", style="bold")
-            label_table.add_column("Count", justify="right")
-            for label, count in label_counter.most_common():
-                label_table.add_row(label, str(count))
-            console.print()
-            console.print(label_table)
-
-        console.print(f"\n  Total tasks: {len(reports)}")
-
-    except ImportError:
-        print("\n=== bench-cleanser results ===")
-        print(f"Total tasks analysed: {len(reports)}")
-        for sev, count in severity_counts.items():
-            pct = (count / len(reports) * 100) if reports else 0
-            print(f"  {sev:10s}: {count:4d}  ({pct:.1f}%)")
-        if label_counter:
-            print("\nTask Label Distribution:")
-            for label, count in label_counter.most_common():
-                print(f"  {label:40s}: {count:4d}")
+    The canonical summary is the "Pipeline Complete" Rich table printed by
+    :func:`bench_cleanser.pipeline.run_pipeline`. This shim is a no-op so
+    out-of-tree callers don't crash if they still import the symbol.
+    """
+    return None
 
 
 def main() -> None:
@@ -129,13 +86,7 @@ def main() -> None:
     from bench_cleanser.pipeline import load_config, run_pipeline
 
     args = _parse_pipeline_args()
-
-    level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    setup_logging(args.verbose)
 
     config = load_config(args.config)
     if args.output:
@@ -165,9 +116,7 @@ def main() -> None:
     logging.info("Loaded %d task(s)", len(records))
 
     reports = asyncio.run(run_pipeline(records, config, resume=args.resume))
-    _print_pipeline_summary(reports)
-
-    print(f"Output written to: {config.output_dir}/")
+    print(f"Output written to: {config.output_dir}/  ({len(reports)} task(s))")
 
 
 def _parse_trajectory_args() -> argparse.Namespace:
@@ -205,13 +154,7 @@ def _parse_trajectory_args() -> argparse.Namespace:
 def trajectory_main() -> None:
     """Console entry point for trajectory-leakage + Stage 7 fusion analysis."""
     args = _parse_trajectory_args()
-
-    level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    setup_logging(args.verbose)
 
     llm = None
     max_concurrency = 10
@@ -281,13 +224,7 @@ def _parse_deep_dive_args() -> argparse.Namespace:
 def deep_dive_main() -> None:
     """Console entry point for forensic deep-dive markdown."""
     args = _parse_deep_dive_args()
-
-    level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    setup_logging(args.verbose)
 
     from bench_cleanser.deep_dive import build_deep_dive
 

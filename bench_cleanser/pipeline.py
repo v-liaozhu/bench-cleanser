@@ -204,13 +204,16 @@ def enrich_with_code_context(
 
 
 def _log_code_context(parsed: ParsedTask, instance_id: str) -> None:
-    """Print code context summary to terminal for visibility."""
+    """Emit per-test code-context summaries at DEBUG level (visible with ``-v``).
+
+    A missing context block is a real signal and stays at WARNING.
+    """
     for th in parsed.f2p_test_hunks:
         ctx = th.code_context
         if ctx is None:
             logger.warning("[%s] %s: NO code context", instance_id, th.test_name)
             continue
-        logger.info(
+        logger.debug(
             "[%s] %s: %d tested functions, %d call targets, "
             "%d assertions, pre_patch=%s",
             instance_id, th.test_name,
@@ -220,7 +223,7 @@ def _log_code_context(parsed: ParsedTask, instance_id: str) -> None:
         )
         for tf in ctx.tested_functions:
             tag = "PATCHED" if tf.is_modified_by_patch else "unpatched"
-            logger.info(
+            logger.debug(
                 "  -> %s [%s] %s (%d lines)",
                 tf.name, tag, tf.file_path,
                 len(tf.source.splitlines()) if tf.source else 0,
@@ -372,7 +375,6 @@ async def run_pipeline(
     severity_counts = {sev.value: 0 for sev in Severity}
 
     try:
-        from rich.console import Console
         from rich.progress import (
             BarColumn,
             MofNCompleteColumn,
@@ -384,6 +386,8 @@ async def run_pipeline(
             TimeRemainingColumn,
         )
         from rich.table import Table
+
+        from bench_cleanser._console import get_console, truncate_status
         use_rich = True
     except ImportError:
         use_rich = False
@@ -436,7 +440,7 @@ async def run_pipeline(
             return report
 
     if use_rich:
-        console = Console()
+        console = get_console()
         with Progress(
             SpinnerColumn(),
             TextColumn("[bold blue]bench-cleanser"),
@@ -467,7 +471,7 @@ async def run_pipeline(
                 if error_count:
                     status_parts.append(f"[red bold]ERR:{error_count}[/red bold]")
                 status_parts.append(f"[dim]{rate_per_min:.1f}/min[/dim]")
-                progress.update(task_id, advance=1, status=" ".join(status_parts))
+                progress.update(task_id, advance=1, status=truncate_status(status_parts))
             tasks = [_process(record, _update_progress) for record in records]
             reports = list(await asyncio.gather(*tasks))
 
@@ -629,6 +633,6 @@ def _write_summary(
     stats_path = output_dir / "summary_stats.json"
     stats_path.write_text(json.dumps(stats, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    logger.info("Summary written to %s", output_dir)
-    logger.info("Severity: %s", severity_counts)
-    logger.info("Labels: %s", label_counts)
+    logger.debug("Summary written to %s", output_dir)
+    logger.debug("Severity: %s", severity_counts)
+    logger.debug("Labels: %s", label_counts)

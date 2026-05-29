@@ -13,6 +13,12 @@ import pathlib
 from collections import Counter, defaultdict
 from typing import Any
 
+from bench_cleanser._console import (
+    ALL_FUSION_VERDICTS,
+    ALL_LEAKAGE_PATTERNS,
+    get_console,
+    truncate_status,
+)
 from bench_cleanser.fusion import FusionVerdict, fuse
 from bench_cleanser.models import ContaminationReport, TaskRecord
 from bench_cleanser.trajectory.classifier import (
@@ -52,7 +58,6 @@ async def analyze_trajectories(
     pattern_counts: dict[str, int] = defaultdict(int)
 
     try:
-        from rich.console import Console
         from rich.progress import (
             BarColumn,
             MofNCompleteColumn,
@@ -93,10 +98,14 @@ async def analyze_trajectories(
             pattern_counts[result.leakage_pattern.value] += 1
 
             if progress is not None and task_id is not None:
-                status_parts = []
-                for p, c in sorted(pattern_counts.items()):
-                    status_parts.append(f"{p}:{c}")
-                progress.update(task_id, advance=1, status=" ".join(status_parts))
+                status_parts = [
+                    f"{p}:{pattern_counts[p]}"
+                    for p in ALL_LEAKAGE_PATTERNS
+                    if pattern_counts[p]
+                ]
+                progress.update(
+                    task_id, advance=1, status=truncate_status(status_parts),
+                )
 
             logger.debug(
                 "%s/%s: %s (strength=%s, sim=%.2f)",
@@ -107,7 +116,7 @@ async def analyze_trajectories(
             return result
 
     if use_rich:
-        console = Console()
+        console = get_console()
         with Progress(
             SpinnerColumn(), TextColumn("[bold cyan]trajectory-analysis"),
             BarColumn(bar_width=40), MofNCompleteColumn(), TaskProgressColumn(),
@@ -172,7 +181,8 @@ def generate_trajectory_summary(
 
     lines.append("### Overview\n")
     lines.append(f"- **Total trajectories analyzed:** {len(analyses)}")
-    for pattern, count in sorted(pattern_counts.items()):
+    for pattern in ALL_LEAKAGE_PATTERNS:
+        count = pattern_counts.get(pattern, 0)
         pct = count / max(len(analyses), 1) * 100
         lines.append(f"- **{pattern}:** {count} ({pct:.1f}%)")
     lines.append("")
@@ -545,10 +555,23 @@ async def run_trajectory_analysis(
                 continue
             fusions.append(fuse(rep, a).to_dict())
 
+        pattern_totals = Counter(a.leakage_pattern.value for a in analyses)
+        fusion_total = sum(fusion_counter.values())
+        invalidated_pct = (invalidated / fusion_total) if fusion_total else 0.0
+
+        summary_stats = {
+            "total_trajectories": len(analyses),
+            "pattern_counts": {p: pattern_totals.get(p, 0) for p in ALL_LEAKAGE_PATTERNS},
+            "fusion_verdicts": {v: fusion_counter.get(v, 0) for v in ALL_FUSION_VERDICTS},
+            "invalidated_count": invalidated,
+            "invalidated_pct": round(invalidated_pct, 4),
+        }
+
         json_data = {
             "analyses": [a.to_dict() for a in analyses],
             "leakage_rates": rates,
             "fusion": fusions,
+            "summary_stats": summary_stats,
         }
         json_path.write_text(
             json.dumps(json_data, indent=2, ensure_ascii=False),
